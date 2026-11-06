@@ -12,17 +12,17 @@ Go to the **[Releases page](../../releases)**. There are two releases:
 
 | Release | What is in it |
 |---|---|
-| **App 2.7** | The Android app (`.apk`), the Windows app (`.zip`), and a lighter Android app for old 32-bit phones |
+| **App 2.8** | The Android app (`.apk`), the Windows app (`.zip`), and a lighter Android app for old 32-bit phones |
 | **Map packs** | The map data files (`.bhmap`). The app does not include the map, so you add these once |
 
 ### Android phone
-1. On your phone open the Releases page, then **App 2.7**, and tap `Blackout-Handbook-2.7.apk`.
+1. On your phone open the Releases page, then **App 2.8**, and tap `Blackout-Handbook-2.8.apk`.
 2. Open the downloaded file. Android asks to allow installs from your browser: allow it once.
 3. If Play Protect warns about an unknown app, choose **Install anyway**. The app is signed by its author, not by Google Play.
 4. Old 32-bit phone? Use `Blackout-Handbook-Lite-1.2.apk` instead (no AI, no map).
 
 ### Windows laptop
-1. Download `Blackout-Handbook-Windows-2.7.zip` and unzip it anywhere (or onto a USB stick).
+1. Download `Blackout-Handbook-Windows-2.8.zip` and unzip it anywhere (or onto a USB stick).
 2. Open the folder and double-click **Blackout Handbook.exe**. If Windows SmartScreen warns, choose *More info* then *Run anyway*.
 3. To keep your data on a USB stick, create an empty file called `portable.flag` next to the `.exe`.
 

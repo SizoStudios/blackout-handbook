@@ -63,7 +63,7 @@ const NAMEOF = Object.fromEntries(LAYERS.flatMap(g => g[1].map(i => [i[0], i[1]]
 const CAVEAT = { water: 'Untreated water is not safe to drink: boil or treat it. Wells and tanks may be dry, fouled or watched.', shelter: 'Check from a distance for occupants, animals and rockfall before going in.', res: 'May be looted, guarded or empty. Never assume stock. Check from cover.', pub: 'May be locked, guarded, damaged or occupied. Do not assume anyone inside is friendly or that supplies remain.', haz: 'Likely target and fire or smoke risk. Keep well away; plan routes upwind.', choke: 'Likely roadblock or ambush point. Avoid if possible.' };
 
 /* ---------- settings ---------- */
-const DEF = { layers: {}, icon: 100, label: 100, line: 100, iconAuto: true, units: 'km', coord: 'dec', theme: 'auto', start: 'last', home: null, townMin: 'auto', names: true, measureAuto: 0, walk: 4.5, cycle: 15, car: 90, gravelFactor: 0.6, climbH: 600, staleAmber: 180, staleRed: 365, fps: false };
+const DEF = { layers: {}, icon: 100, label: 100, line: 100, iconAuto: true, units: 'km', coord: 'dec', theme: 'auto', start: 'last', home: null, townMin: 'auto', names: true, measureAuto: 0, walk: 4.5, cycle: 15, car: 90, gravelFactor: 0.6, climbH: 600, staleAmber: 180, staleRed: 365, fps: false, gpsEvery: 'cont', gpsAutoOff: 30, gpsStopLeave: true };
 let P = null, firstRun = false, V = { k: 0.5, tx: 0, ty: 0 };
 const M = { packs: [], base: null, terrain: false, elev: null, tint: null, shade: null, contourC: {}, places: null, cells: new Map(), pending: new Set(), regions: [], overview: null, root: null, cv: null, ctx: null, CW: 1, CH: 1, DPR: 1, raf: 0, measure: [], measureOn: false, mTimer: 0, me: null, watch: 0, sel: null, pins: [], q: '' };
 let savePrefsT = 0;
@@ -310,7 +310,7 @@ function render() {
   if (M.measure.length) { M.measure.forEach((q, i) => { const x = S(mx(q[0])), y = T(my(q[1])); g.beginPath(); g.arc(x, y, 8, 0, 7); g.fillStyle = '#ffd24a'; g.fill(); g.strokeStyle = '#000'; g.lineWidth = 2; g.stroke(); g.fillStyle = '#000'; g.font = 'bold 11px system-ui'; g.textAlign = 'center'; g.fillText(String(i + 1), x, y + 3.2); g.textAlign = 'left'; }); }
   if (M.route && M.route.stops) M.route.stops.forEach((q, i) => { const x = S(mx(q[0])), y = T(my(q[1])); g.beginPath(); g.arc(x, y, 8, 0, 7); g.fillStyle = '#38e0b0'; g.fill(); g.strokeStyle = '#000'; g.lineWidth = 2; g.stroke(); g.fillStyle = '#000'; g.font = 'bold 10px system-ui'; g.textAlign = 'center'; g.fillText(i === 0 ? 'A' : String.fromCharCode(65 + i), x, y + 3.5); g.textAlign = 'left'; });
   if (M.sel) { const x = S(mx(M.sel.lon)), y = T(my(M.sel.lat)); g.beginPath(); g.arc(x, y, 14, 0, 7); g.strokeStyle = '#fff'; g.lineWidth = 2.5; g.stroke(); g.strokeStyle = '#000'; g.lineWidth = 1; g.stroke(); }
-  if (on('me') && M.me) ICON.me(g, S(mx(M.me.lon)), T(my(M.me.lat)), sc());
+  if (on('me') && M.me) { if (!M.gpsOn) g.globalAlpha = .45; ICON.me(g, S(mx(M.me.lon)), T(my(M.me.lat)), sc()); g.globalAlpha = 1; }
   updateReadout(performance.now() - t0);
 }
 const RSTYLE = { 1: [2.8, 0], 2: [2.3, 1], 3: [1.9, 2], 4: [1.4, 3], 5: [1.0, 4], 6: [0.8, 5] };
@@ -372,7 +372,7 @@ function drawPlaces(g, p, fs) {
 const pinShown = pin => pin.types.some(t => on('pin:' + t));
 function updateReadout(ms) {
   const r = $('#mpRead'); if (!r) return; const lat = uny((M.CH / 2 - V.ty) / V.k), lon = unx((M.CW / 2 - V.tx) / V.k), km = 100 * kmPerPx(lat) / V.k;
-  r.textContent = `${fmtCoord(lat, lon)} · 100 px ≈ ${fmtKm(km)}${P.fps ? ' · ' + ms.toFixed(0) + ' ms' : ''}`;
+  r.textContent = `${fmtCoord(lat, lon)} · 100 px ≈ ${fmtKm(km)}${M.gpsOn ? ' · GPS on' : ''}${P.fps ? ' · ' + ms.toFixed(0) + ' ms' : ''}`;
 }
 
 /* ---------- view control ---------- */
@@ -524,6 +524,7 @@ function openSettings() {
   <h3>Units and numbers</h3>${sel('units', 'Distances', [['km', 'Kilometres and metres'], ['mi', 'Miles and feet']])}${sel('coord', 'Coordinates', [['dec', 'Decimal degrees'], ['dms', 'Degrees, minutes, seconds']])}${sel('theme', 'Map colours', [['auto', 'Follow the app'], ['dark', 'Dark'], ['light', 'Light'], ['contrast', 'High contrast'], ['night', 'Night (red)']])}${sel('townMin', 'Towns shown', [['auto', 'Automatic by zoom'], ['all', 'All towns'], ['5k', 'Over 5,000 people'], ['20k', 'Over 20,000'], ['100k', 'Over 100,000']])}
   <h3>Sizes</h3>${range('icon', 'Icon size', 40, 320, 5, '%')}${range('label', 'Text size', 60, 260, 5, '%')}${range('line', 'Line thickness', 50, 320, 5, '%')}${tog('iconAuto', 'Icons grow and shrink as you zoom')}${tog('names', 'Show names of shops and buildings when zoomed in close')}<div class="row"><button id="szReset">Back to default sizes</button></div>
   <h3>Measuring and travel times</h3>${sel('measureAuto', 'Switch Measure off by itself after', [[0, 'Never'], [2, '2 minutes'], [10, '10 minutes'], [30, '30 minutes']])}${range('walk', 'Your walking speed (km/h, flat)', 2, 8, .1, ' km/h')}${range('climbH', 'Climb that costs you one hour of walking (m)', 200, 1200, 25, ' m')}${range('cycle', 'Cycling speed (km/h)', 6, 35, 1, ' km/h')}${range('car', 'Vehicle cruising speed on main roads (km/h)', 20, 130, 5, ' km/h')}${range('gravelFactor', 'Gravel and tracks run at this share of your speed', .2, 1, .05, '')}
+  <h3>GPS and battery</h3><p class="dim">GPS needs no internet but uses battery while it is on. Use the GPS button on the map to switch it off any time.</p>${sel('gpsEvery', 'How often to check your position', [['cont', 'Continuously (most accurate, most battery)'], [15, 'Every 15 seconds'], [60, 'Every minute'], [300, 'Every 5 minutes (saves most)']])}${sel('gpsAutoOff', 'Switch GPS off by itself after', [[0, 'Never'], [10, '10 minutes'], [30, '30 minutes'], [60, '1 hour'], [120, '2 hours']])}${tog('gpsStopLeave', 'Switch GPS off when I leave the Map tab')}
   <h3>Pins</h3>${range('staleAmber', 'Pin turns amber after (days)', 30, 720, 10, ' d')}${range('staleRed', 'Pin turns red after (days)', 60, 1500, 10, ' d')}
   <h3>Other</h3>${tog('fps', 'Show draw time (for testing speed on this device)')}<div class="row"><button class="dng" id="clean">Back to clean (hide all layers and show the chooser)</button></div>`, 'tall');
   refreshPackList();
@@ -536,7 +537,7 @@ function openSettings() {
     if (t.dataset && t.dataset.rm) { if (!confirm('Remove this map pack from the device?')) return; await removePack(t.dataset.rm); await boot(); refreshPackList(); draw(); }
   };
   s.oninput = e => { const t = e.target, k = t.dataset && t.dataset.s; if (!k || t.type !== 'range') return; P[k] = +t.value; const b = $('#v_' + k); if (b) b.textContent = t.value + (k === 'icon' || k === 'label' || k === 'line' ? '%' : k.includes('Factor') ? '' : ''); savePrefs(); draw(); };
-  s.onchange = e => { const t = e.target; if (t.dataset && t.dataset.s && t.tagName === 'SELECT') { const v = t.value; P[t.dataset.s] = isNaN(+v) || t.dataset.s === 'townMin' || t.dataset.s === 'theme' || t.dataset.s === 'units' || t.dataset.s === 'coord' || t.dataset.s === 'start' ? v : +v; savePrefs(); draw(); } if (t.dataset && t.dataset.t) { P[t.dataset.t] = t.checked; savePrefs(); draw(); } if (t.id === 'packIn') addPacks(t.files); };
+  s.onchange = e => { const t = e.target; if (t.dataset && t.dataset.s && t.tagName === 'SELECT') { const v = t.value; P[t.dataset.s] = isNaN(+v) || t.dataset.s === 'townMin' || t.dataset.s === 'theme' || t.dataset.s === 'units' || t.dataset.s === 'coord' || t.dataset.s === 'start' ? v : +v; savePrefs(); if (M.gpsOn && (t.dataset.s === 'gpsEvery' || t.dataset.s === 'gpsAutoOff')) gpsStart(false); draw(); } if (t.dataset && t.dataset.t) { P[t.dataset.t] = t.checked; savePrefs(); draw(); } if (t.id === 'packIn') addPacks(t.files); };
 }
 const KNOWN = [
   ['base:all', 'Base-Terrain-Places.bhmap', 'Base map, terrain and places', 5, 1], ['roads-ov:all', 'Roads-Overview.bhmap', 'Main roads when zoomed out', 1, 0],
@@ -591,12 +592,24 @@ function searchBox() {
 }
 
 /* ---------- GPS ---------- */
-function locate() {
-  if (!navigator.geolocation) return toast('This device has no GPS access from the app.');
-  toast('Finding you… (GPS needs a clear sky, not a signal)');
-  if (M.watch) navigator.geolocation.clearWatch(M.watch);
-  M.watch = navigator.geolocation.watchPosition(pos => { const first = !M.me; M.me = { lon: pos.coords.longitude, lat: pos.coords.latitude, acc: pos.coords.accuracy }; P.layers.me = true; if (first) flyTo(M.me.lon, M.me.lat, Math.max(V.k, 6)); draw(); }, err => toast(err.code === 1 ? 'Location is switched off for this app. Allow it in the phone settings.' : 'Could not get a GPS fix yet.'), { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 });
+function updateGpsBtn() { const b = $('#mpGps'); if (!b) return; b.textContent = M.gpsOn ? 'GPS: ON' : 'GPS: off'; b.classList.toggle('pri', !!M.gpsOn); b.title = M.gpsOn ? 'Tap to switch the GPS off and save battery' : 'Tap to switch the GPS on'; }
+function gpsStop(silent, why) {
+  if (M.watch) { try { navigator.geolocation.clearWatch(M.watch); } catch (e) {} M.watch = 0; }
+  clearInterval(M.gpsTimer); clearTimeout(M.gpsOffT); M.gpsTimer = 0; M.gpsOffT = 0; const was = M.gpsOn; M.gpsOn = false; updateGpsBtn();
+  if (!silent && was) toast(why || 'GPS is off, saving battery. Your last position stays on the map, faded.'); draw();
 }
+function gpsStart(centre) {
+  if (!navigator.geolocation) return toast('This device has no GPS access from the app.');
+  gpsStop(true); M.gpsOn = true; M.gpsCentre = !!centre; updateGpsBtn(); toast('GPS is on. Finding you… (it needs a clear sky, not a signal)');
+  const opts = { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 };
+  const ok = pos => { const first = !M.me || M.gpsCentre; M.gpsCentre = false; M.me = { lon: pos.coords.longitude, lat: pos.coords.latitude, acc: pos.coords.accuracy, t: Date.now() }; P.layers.me = true; if (first) flyTo(M.me.lon, M.me.lat, Math.max(V.k, 6)); draw(); };
+  const err = e => toast(e.code === 1 ? 'Location is switched off for this app. Allow it in the phone settings.' : 'Could not get a GPS fix yet. Try somewhere with a clear sky.');
+  if (P.gpsEvery === 'cont') M.watch = navigator.geolocation.watchPosition(ok, err, opts);
+  else { const poll = () => navigator.geolocation.getCurrentPosition(ok, err, opts); poll(); M.gpsTimer = setInterval(poll, Math.max(5, +P.gpsEvery) * 1000); }
+  if (+P.gpsAutoOff > 0) M.gpsOffT = setTimeout(() => gpsStop(false, 'GPS switched itself off after ' + P.gpsAutoOff + ' minutes to save battery. Tap GPS to turn it on again.'), P.gpsAutoOff * 60000);
+}
+function locate() { if (M.gpsOn && M.me) { flyTo(M.me.lon, M.me.lat, Math.max(V.k, 6)); } else gpsStart(true); }
+function toggleGps() { M.gpsOn ? gpsStop(false) : gpsStart(true); }
 
 /* ---------- opening the map ---------- */
 async function boot() {
@@ -618,7 +631,7 @@ async function open(view, sub) {
   if (!ok) { view.innerHTML = noPacksHtml(); $('#packIn').onchange = async e => { await addPacks(e.target.files); if (M.base) open(view, sub); }; refreshPackList(); $('#packList').onclick = async e => { const b = e.target.dataset && e.target.dataset.rm; if (b) { await removePack(b); refreshPackList(); } }; return; }
   view.innerHTML = `<div class="mp" id="mp"><canvas id="mpc"></canvas>
   <div class="mp-top"><button id="mpL" class="pri">Layers</button><button id="mpS">Settings</button><input id="mpQ" type="search" placeholder="Find a town, pin or coordinates…" autocomplete="off"></div><div class="mp-find" id="mpFind" hidden></div>
-  <div class="mp-fab"><button id="mpZin" aria-label="Zoom in">+</button><button id="mpZout" aria-label="Zoom out">−</button><button id="mpLoc" aria-label="My location">◎</button><button id="mpMeas" class="pill">Measure</button><button id="mpRt" class="pill">Route</button></div>
+  <div class="mp-fab"><button id="mpZin" aria-label="Zoom in">+</button><button id="mpZout" aria-label="Zoom out">−</button><button id="mpLoc" aria-label="Go to my location">◎</button><button id="mpGps" class="pill">GPS: off</button><button id="mpMeas" class="pill">Measure</button><button id="mpRt" class="pill">Route</button></div>
   <div class="mp-meas" id="mpMeasInfo" hidden></div><div class="mp-read" id="mpRead"></div><div class="mp-toast" id="mpToast" hidden></div><div class="mp-sheet" id="mpSheet" hidden></div></div>`;
   M.root = $('#mp'); M.cv = $('#mpc'); M.ctx = M.cv.getContext('2d'); setSize();
   const saved = await kvGet('map.view', null);
@@ -626,13 +639,13 @@ async function open(view, sub) {
   if (!(P.start === 'home' && P.home)) { if (!(P.start === 'last' && saved && saved.k)) fit(); }
   bindPointer(); searchBox();
   $('#mpL').onclick = () => openLayers(false); $('#mpS').onclick = openSettings;
-  $('#mpZin').onclick = () => zoomAt(1.6, M.CW / 2, M.CH / 2); $('#mpZout').onclick = () => zoomAt(1 / 1.6, M.CW / 2, M.CH / 2); $('#mpLoc').onclick = locate;
+  $('#mpZin').onclick = () => zoomAt(1.6, M.CW / 2, M.CH / 2); $('#mpZout').onclick = () => zoomAt(1 / 1.6, M.CW / 2, M.CH / 2); $('#mpLoc').onclick = locate; $('#mpGps').onclick = toggleGps; updateGpsBtn();
   $('#mpMeas').onclick = () => toggleMeasure(); $('#mpRt').onclick = () => { if (window.BHRoute) window.BHRoute.open(); else toast('The route planner is not installed in this build.'); };
-  M.measureOn = false; if (P.start === 'gps') locate();
+  M.measureOn = false; if (P.start === 'gps') gpsStart(true);
   window.addEventListener('resize', onResize); draw();
   if (firstRun) openLayers(true);
 }
 function onResize() { if (!M.root || !document.body.contains(M.root)) return window.removeEventListener('resize', onResize); setSize(); draw(); }
-function leave() { document.body.classList.remove('mapmode'); clearTimeout(M.mTimer); }
+function leave() { document.body.classList.remove('mapmode'); clearTimeout(M.mTimer); if (P && P.gpsStopLeave && M.gpsOn) gpsStop(true); }
 window.BHMap = { listPacks: async () => { await loadPacks(); return M.packs; }, removePackById: id => removePack(id), open, leave, M, mx, my, unx, uny, hav, kmPerPx, getRec, elevAt, flyTo, draw, openSheet, closeSheet, fmtKm, fmtM, fmtH, fmtCoord, toast, get P() { return P; }, V: () => V };
 })();
