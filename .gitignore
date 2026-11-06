@@ -1,0 +1,6 @@
+mockups/
+_testpacks/
+node_modules/
+*.bhmap
+*.apk
+*.zip
