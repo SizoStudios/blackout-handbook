@@ -23,6 +23,7 @@ const LAYERS = [
   ['Terrain and heights', [
     ['tint', 'Height colours', 'Colours the land by height above sea level.'],
     ['shade', 'Hill shading', 'Light and shadow that make hills and valleys stand out.'],
+    ['sat', 'Satellite photos (where you added a photo pack)', 'True-colour Sentinel-2 photos at about 10 m per pixel: shows forest, bush, farmland, water, built-up areas and gorges. Single houses are too small to see. Contains modified Copernicus Sentinel data.'],
     ['contour', 'Contour lines', 'Lines of equal height. Close lines mean steep ground. Slower to draw.']]],
   ['Borders and names', [
     ['bCountry', 'Country borders', 'Pale-violet line along the country borders.'],
@@ -65,7 +66,7 @@ const CAVEAT = { water: 'Untreated water is not safe to drink: boil or treat it.
 /* ---------- settings ---------- */
 const DEF = { layers: {}, icon: 100, label: 100, line: 100, iconAuto: true, units: 'km', coord: 'dec', theme: 'auto', start: 'last', home: null, townMin: 'auto', names: true, measureAuto: 0, walk: 4.5, cycle: 15, car: 90, gravelFactor: 0.6, climbH: 600, staleAmber: 180, staleRed: 365, fps: false, gpsEvery: 'cont', gpsAutoOff: 30, gpsStopLeave: true };
 let P = null, firstRun = false, V = { k: 0.5, tx: 0, ty: 0 };
-const M = { packs: [], base: null, terrain: false, elev: null, tint: null, shade: null, contourC: {}, places: null, cells: new Map(), pending: new Set(), regions: [], overview: null, root: null, cv: null, ctx: null, CW: 1, CH: 1, DPR: 1, raf: 0, measure: [], measureOn: false, mTimer: 0, me: null, watch: 0, sel: null, pins: [], q: '' };
+const M = { sat: { keys: new Set(), cache: new Map(), pending: new Set(), regions: [] }, packs: [], base: null, terrain: false, elev: null, tint: null, shade: null, contourC: {}, places: null, cells: new Map(), pending: new Set(), regions: [], overview: null, root: null, cv: null, ctx: null, CW: 1, CH: 1, DPR: 1, raf: 0, measure: [], measureOn: false, mTimer: 0, me: null, watch: 0, sel: null, pins: [], q: '' };
 let savePrefsT = 0;
 const savePrefs = () => { clearTimeout(savePrefsT); savePrefsT = setTimeout(() => kvSet('map.prefs', P), 150); };
 const saveView = () => { clearTimeout(saveView.t); saveView.t = setTimeout(() => kvSet('map.view', V), 600); };
@@ -76,6 +77,7 @@ async function loadPacks() {
   M.packs = await kvGet('map.packs', []);
   M.regions = M.packs.filter(p => p.pack === 'roads').map(p => p.region);
   const ov = M.packs.find(p => p.pack === 'roads-ov'); M.hasOv = !!ov;
+  M.sat.regions = M.packs.filter(p => p.pack === 'imagery').map(p => p.region); await loadSatKeys();
 }
 async function importPack(file, progress) {
   const head = new Uint8Array(await file.slice(0, 11).arrayBuffer());
@@ -92,7 +94,7 @@ async function importPack(file, progress) {
     if (bytes > 6 * 1048576 || batch.length > 400) { await flush(); if (progress) progress(done, total); }
   }
   await flush(); if (progress) progress(total, total);
-  const meta = { id, pack: hdr.pack, region: hdr.region, name: hdr.name, version: hdr.version, created: hdr.created, entries: total, mb: +(file.size / 1048576).toFixed(1), licence: hdr.licence, added: Date.now() };
+  const meta = { id, pack: hdr.pack, region: hdr.region, name: hdr.name, version: hdr.version, created: hdr.created, entries: total, mb: +(file.size / 1048576).toFixed(1), licence: hdr.licence, info: hdr.info || null, added: Date.now() };
   const list = (await kvGet('map.packs', [])).filter(p => p.id !== id); list.push(meta); await kvSet('map.packs', list);
   M.cells.clear(); M.pending.clear(); M.base = null; M.places = null; M.terrain = false;
   await loadPacks();
@@ -102,7 +104,7 @@ async function removePack(id) {
   const meta = M.packs.find(p => p.id === id); if (!meta) return;
   const keys = await new Promise(res => { const out = [], t = DB.db.transaction('mapdata', 'readonly'), r = t.objectStore('mapdata').openKeyCursor(); r.onsuccess = () => { const c = r.result; if (c) { out.push(c.key); c.continue(); } }; t.oncomplete = () => res(out); });
   const pref = meta.pack === 'roads' ? 'r/' + meta.region + '/' : meta.pack === 'base' ? null : null;
-  const kill = meta.pack === 'routing' ? keys.filter(k => k.startsWith('g/')) : meta.pack === 'base' ? keys.filter(k => k === 'base' || k === 'places' || k.startsWith('t/')) : meta.pack === 'roads-ov' ? keys.filter(k => k === 'ov') : keys.filter(k => k.startsWith(pref));
+  const kill = meta.pack === 'imagery' ? keys.filter(k => k.startsWith('i/' + meta.region + '/')) : meta.pack === 'routing' ? keys.filter(k => k.startsWith('g/')) : meta.pack === 'base' ? keys.filter(k => k === 'base' || k === 'places' || k.startsWith('t/')) : meta.pack === 'roads-ov' ? keys.filter(k => k === 'ov') : keys.filter(k => k.startsWith(pref));
   for (let i = 0; i < kill.length; i += 500) await new Promise(res => { const t = DB.db.transaction('mapdata', 'readwrite'), s = t.objectStore('mapdata'); kill.slice(i, i + 500).forEach(k => s.delete(k)); t.oncomplete = res; });
   await kvSet('map.packs', M.packs.filter(p => p.id !== id));
   M.cells.clear(); M.pending.clear(); M.base = null; M.places = null; M.terrain = false; await loadPacks();
@@ -226,6 +228,29 @@ async function loadOverview() {
   if (M.overview || !M.hasOv) return; const d = await getRec('ov'); if (d) M.overview = decodeCell([d]);
 }
 
+/* ---------- satellite photo tiles (added as photo packs) ---------- */
+async function loadSatKeys() {
+  const s = M.sat; s.keys = new Set(); s.cache.forEach(b => { try { b.close && b.close(); } catch (e) {} }); s.cache = new Map(); s.pending = new Set();
+  if (!s.regions.length || !DB.db) return;
+  await new Promise(res => { try { const t = DB.db.transaction('mapdata', 'readonly'), r = t.objectStore('mapdata').openKeyCursor(IDBKeyRange.bound('i/', 'i0')); r.onsuccess = () => { const c = r.result; if (c) { s.keys.add(c.key.slice(2)); c.continue(); } }; t.oncomplete = res; t.onerror = res; } catch (e) { res(); } });
+}
+function satFind(z, x, y) { for (const r of M.sat.regions) { const k = r + '/' + z + '/' + x + '/' + y; if (M.sat.keys.has(k)) return k; } return null; }
+function satWant(key) {
+  const s = M.sat; if (s.cache.has(key) || s.pending.has(key)) return; s.pending.add(key);
+  getRec('i/' + key).then(d => d ? createImageBitmap(new Blob([d], { type: 'image/jpeg' })) : null).then(bm => { s.pending.delete(key); if (bm) { s.cache.set(key, bm); if (s.cache.size > 260) { const it = s.cache.keys(); for (let i = 0; i < 60; i++) { const kk = it.next().value; const b = s.cache.get(kk); try { b.close && b.close(); } catch (e) {} s.cache.delete(kk); } } draw(); } }).catch(() => s.pending.delete(key));
+}
+function drawSat(g, k) {
+  if (!M.sat.keys.size) return; const z = Math.max(10, Math.min(14, Math.round(7 + Math.log2(k) + 0.3))), sz = 256 / 2 ** (z - 7), c = M.sat.cache;
+  const bx0 = -V.tx / k, by0 = -V.ty / k, bx1 = (M.CW - V.tx) / k, by1 = (M.CH - V.ty) / k;
+  const x0 = Math.floor((bx0 + X0 * TS) / sz), x1 = Math.floor((bx1 + X0 * TS) / sz), y0 = Math.floor((by0 + Y0 * TS) / sz), y1 = Math.floor((by1 + Y0 * TS) / sz);
+  if ((x1 - x0 + 1) * (y1 - y0 + 1) > 120) return; g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
+  for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) {
+    const key = satFind(z, x, y); if (!key) continue; const dx = x * sz - X0 * TS, dy = y * sz - Y0 * TS, bm = c.get(key);
+    if (bm) { g.drawImage(bm, dx - 0.02, dy - 0.02, sz + 0.04, sz + 0.04); continue; }
+    satWant(key);
+    for (let d = 1; d <= 4 && z - d >= 10; d++) { const ax = x >> d, ay = y >> d, ak = satFind(z - d, ax, ay), ab = ak && c.get(ak); if (ab) { const f = 256 >> d; g.drawImage(ab, (x - (ax << d)) * f, (y - (ay << d)) * f, f, f, dx, dy, sz, sz); break; } }
+  }
+}
 /* ---------- icons ---------- */
 const RESG = { clinic: '+', pharm: 'Rx', hard: 'H', fuel: 'F', food: 'S' }, PUBS = { police: ['#6c8cff', 'P'], fire: ['#ff7043', 'F'], gov: ['#34d3c0', 'G'], school: ['#ff9ecb', 'S'] };
 const ICON = {
@@ -252,6 +277,7 @@ function swatch(key, dpr) {
   const cx = w / 2, cy = h / 2;
   if (key === 'tint') { const gr = g.createLinearGradient(2, 0, w - 2, 0); (RAMPS[p.ramp] || RAMPS.natural).forEach(([e, c]) => gr.addColorStop(Math.min(1, e / 3500), `rgb(${c.map(Math.round)})`)); g.fillStyle = gr; g.fillRect(2, 4, w - 4, h - 8); }
   else if (key === 'shade') { const gr = g.createLinearGradient(2, h, w - 2, 0); gr.addColorStop(0, '#111'); gr.addColorStop(.5, '#777'); gr.addColorStop(1, '#fff'); g.fillStyle = gr; g.fillRect(2, 4, w - 4, h - 8); }
+  else if (key === 'sat') { const cs = ['#5b7a3a', '#8a7a4a', '#3d5a2f', '#6c8b52', '#a08a5a', '#2f4a28']; for (let i = 0; i < 6; i++) { g.fillStyle = cs[i]; g.fillRect(2 + (i % 3) * 10, 3 + Math.floor(i / 3) * 8, 10, 8); } }
   else if (key === 'contour') { g.strokeStyle = '#e7c98a'; g.lineWidth = 1; for (const o of [4, 9, 14]) { g.beginPath(); g.moveTo(2, h * .7 - o + 8); g.bezierCurveTo(12, h * .1 + o - 6, 20, h + 2 - o, w - 2, h * .4 + o - 8); g.stroke(); } }
   else if (key === 'bCountry') line('#d8c7ff', 2.2); else if (key === 'bProv') line('#7d8db3', 1.2, [4, 3]);
   else if (key === 'lCountry') txt('L E S O T H O', '#d8c7ff', '700 7.5px system-ui'); else if (key === 'lProv') { g.globalAlpha = .7; txt('G A U T E N G', '#d6deee', '600 7px system-ui'); g.globalAlpha = 1; }
@@ -293,6 +319,7 @@ function render() {
   for (const c of M.base.countries) { g.beginPath(); pathPoly(g, c.p); g.fillStyle = HOME.includes(c.a3) ? p.home : p.foreign; g.fill('evenodd'); }
   if (M.terrain && M.builtTheme !== themeName()) buildRasters();
   if (M.tint && on('tint')) g.drawImage(M.tint, 0, 0); if (M.shade && on('shade')) g.drawImage(M.shade, 0, 0);
+  if (on('sat')) drawSat(g, k);
   if (M.elev && on('contour')) { const iv = k < 1.5 ? 500 : k < 4 ? 200 : 100, cs = contours(iv); g.lineWidth = .5 * ls / k * 2; g.strokeStyle = 'rgba(231,201,138,.45)'; g.beginPath(); for (let i = 0; i < cs[0].length; i += 4) { g.moveTo(cs[0][i], cs[0][i + 1]); g.lineTo(cs[0][i + 2], cs[0][i + 3]); } g.stroke(); g.lineWidth = 1 * ls / k * 2; g.strokeStyle = 'rgba(231,201,138,.8)'; g.beginPath(); for (let i = 0; i < cs[1].length; i += 4) { g.moveTo(cs[1][i], cs[1][i + 1]); g.lineTo(cs[1][i + 2], cs[1][i + 3]); } g.stroke(); }
   if (on('rivers')) { g.lineJoin = 'round'; g.strokeStyle = p.river; g.lineWidth = 1.8 * ls / k; g.beginPath(); M.base.rivers.forEach(r => r.p.forEach(l => pathLine(g, l))); g.stroke(); g.fillStyle = p.lake; g.beginPath(); M.base.lakes.forEach(l => pathPoly(g, l.p)); g.fill('evenodd'); }
   if (on('bProv')) { g.strokeStyle = p.bP; g.lineWidth = 1 * ls / k; g.setLineDash([4 / k, 3 / k]); g.beginPath(); M.base.provinces.forEach(c => c.p.forEach(r => { pathLine(g, r); g.closePath(); })); g.stroke(); g.setLineDash([]); }
@@ -372,7 +399,7 @@ function drawPlaces(g, p, fs) {
 const pinShown = pin => pin.types.some(t => on('pin:' + t));
 function updateReadout(ms) {
   const r = $('#mpRead'); if (!r) return; const lat = uny((M.CH / 2 - V.ty) / V.k), lon = unx((M.CW / 2 - V.tx) / V.k), km = 100 * kmPerPx(lat) / V.k;
-  r.textContent = `${fmtCoord(lat, lon)} · 100 px ≈ ${fmtKm(km)}${M.gpsOn ? ' · GPS on' : ''}${P.fps ? ' · ' + ms.toFixed(0) + ' ms' : ''}`;
+  r.textContent = `${fmtCoord(lat, lon)} · 100 px ≈ ${fmtKm(km)}${M.gpsOn ? ' · GPS on' : ''}${on('sat') && M.sat.keys.size ? ' · Contains modified Copernicus Sentinel data' : ''}${P.fps ? ' · ' + ms.toFixed(0) + ' ms' : ''}`;
 }
 
 /* ---------- view control ---------- */
