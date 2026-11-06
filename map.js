@@ -23,7 +23,7 @@ const LAYERS = [
   ['Terrain and heights', [
     ['tint', 'Height colours', 'Colours the land by height above sea level.'],
     ['shade', 'Hill shading', 'Light and shadow that make hills and valleys stand out.'],
-    ['sat', 'Satellite photos (where you added a photo pack)', 'True-colour Sentinel-2 photos at about 10 m per pixel: shows forest, bush, farmland, water, built-up areas and gorges. Single houses are too small to see. Contains modified Copernicus Sentinel data.'],
+    ['sat', 'Satellite photos (where you added a photo pack)', 'True-colour Sentinel-2 photos at about 10 m per pixel: shows forest, bush, farmland, water, built-up areas and gorges. Single houses are too small to see. Shows only inside the area of the photo pack you added, and only once you zoom in to about 30 km across. Settings > Map packs has a button that takes you there. Contains modified Copernicus Sentinel data.'],
     ['contour', 'Contour lines', 'Lines of equal height. Close lines mean steep ground. Slower to draw.']]],
   ['Borders and names', [
     ['bCountry', 'Country borders', 'Pale-violet line along the country borders.'],
@@ -310,8 +310,13 @@ function draw() { if (!M.raf && M.cv) M.raf = requestAnimationFrame(render); }
 function viewBounds() { return [unx(-V.tx / V.k), uny((M.CH - V.ty) / V.k), unx((M.CW - V.tx) / V.k), uny(-V.ty / V.k)]; }
 function pathPoly(g, rings) { rings.forEach(p => { g.moveTo(p[0], p[1]); for (let i = 2; i < p.length; i += 2) g.lineTo(p[i], p[i + 1]); g.closePath(); }); }
 function pathLine(g, p) { g.moveTo(p[0], p[1]); for (let i = 2; i < p.length; i += 2) g.lineTo(p[i], p[i + 1]); }
-function render() {
-  M.raf = 0; const t0 = performance.now(), g = M.ctx, k = V.k, p = pal(), dpr = M.DPR, ls = P.line / 100, fs = P.label / 100;
+function render() { try { renderInner(); } catch (e) { M.raf = 0; const m = 'Map drawing problem: ' + (e && e.message || e); if (M.lastErr !== m) { M.lastErr = m; try { toast(m); } catch (x) {} } } }
+function renderInner() {
+  M.raf = 0;
+  // Safety net: if the screen size was not known when the map opened, or the saved view is broken, measure again and fit the whole map.
+  if (M.root && !(M.CW > 10 && M.CH > 10)) { setSize(); if (!(M.CW > 10 && M.CH > 10)) { draw(); return; } }
+  if (!(V && V.k > 0 && isFinite(V.k) && isFinite(V.tx) && isFinite(V.ty))) V = (() => { const k = fitK(); return { k, tx: (M.CW - W * k) / 2, ty: (M.CH - H * k) / 2 }; })();
+  const t0 = performance.now(), g = M.ctx, k = V.k, p = pal(), dpr = M.DPR, ls = P.line / 100, fs = P.label / 100;
   g.setTransform(1, 0, 0, 1, 0, 0); g.fillStyle = p.ocean; g.fillRect(0, 0, M.cv.width, M.cv.height);
   if (!M.base) { g.setTransform(dpr, 0, 0, dpr, 0, 0); return; }
   g.setTransform(dpr * k, 0, 0, dpr * k, dpr * V.tx, dpr * V.ty);
@@ -561,10 +566,15 @@ function openSettings() {
     if (t.id === 'setHome') { const lat = uny((M.CH / 2 - V.ty) / V.k), lon = unx((M.CW / 2 - V.tx) / V.k); P.home = [lon, lat]; savePrefs(); toast('Home spot saved'); }
     if (t.id === 'szReset') { P.icon = P.label = P.line = 100; P.iconAuto = true; savePrefs(); openSettings(); draw(); }
     if (t.id === 'clean') { if (!confirm('Hide every layer and show the "What do you want to see?" list again? Your pins are kept.')) return; P.layers = {}; firstRun = true; savePrefs(); openLayers(true); draw(); }
+    if (t.dataset && t.dataset.sat) { goSat(t.dataset.sat); return; }
     if (t.dataset && t.dataset.rm) { if (!confirm('Remove this map pack from the device?')) return; await removePack(t.dataset.rm); await boot(); refreshPackList(); draw(); }
   };
   s.oninput = e => { const t = e.target, k = t.dataset && t.dataset.s; if (!k || t.type !== 'range') return; P[k] = +t.value; const b = $('#v_' + k); if (b) b.textContent = t.value + (k === 'icon' || k === 'label' || k === 'line' ? '%' : k.includes('Factor') ? '' : ''); savePrefs(); draw(); };
   s.onchange = e => { const t = e.target; if (t.dataset && t.dataset.s && t.tagName === 'SELECT') { const v = t.value; P[t.dataset.s] = isNaN(+v) || t.dataset.s === 'townMin' || t.dataset.s === 'theme' || t.dataset.s === 'units' || t.dataset.s === 'coord' || t.dataset.s === 'start' ? v : +v; savePrefs(); if (M.gpsOn && (t.dataset.s === 'gpsEvery' || t.dataset.s === 'gpsAutoOff')) gpsStart(false); draw(); } if (t.dataset && t.dataset.t) { P[t.dataset.t] = t.checked; savePrefs(); draw(); } if (t.id === 'packIn') addPacks(t.files); };
+}
+function goSat(id) {
+  const p = M.packs.find(x => x.id === id), b = p && p.info && p.info.bbox; if (!b) return toast('This photo pack does not say where it is.');
+  P.layers.sat = true; savePrefs(); closeSheet(); flyTo((b[0] + b[2]) / 2, (b[1] + b[3]) / 2, 10); toast('Satellite photos are on. Zoom in to see more detail.');
 }
 const KNOWN = [
   ['base:all', 'Base-Terrain-Places.bhmap', 'Base map, terrain and places', 5, 1], ['roads-ov:all', 'Roads-Overview.bhmap', 'Main roads when zoomed out', 1, 0],
@@ -589,7 +599,7 @@ async function refreshPackList() {
     const mark = cls === 'ok' ? '✓' : cls === 'bad' ? '✗' : '○';
     return '<div class="row"><b class="' + cls + '" style="width:1.3em">' + mark + '</b><span class="grow"><b>' + esc(name) + '</b><br><span class="dim">' + esc(file) + ' · about ' + mb + ' MB · <span class="' + cls + '">' + st + '</span></span></span>' + (p ? '<button class="dng" data-rm="' + esc(id) + '">Remove</button>' : '') + '</div>';
   });
-  const extra = M.packs.filter(p => !KNOWN.some(k => k[0] === p.id)).map(p => '<div class="row"><b class="ok" style="width:1.3em">✓</b><span class="grow"><b>' + esc(p.name) + '</b><br><span class="dim">' + p.mb + ' MB</span></span><button class="dng" data-rm="' + esc(p.id) + '">Remove</button></div>').join('');
+  const extra = M.packs.filter(p => !KNOWN.some(k => k[0] === p.id)).map(p => '<div class="row"><b class="ok" style="width:1.3em">✓</b><span class="grow"><b>' + esc(p.name) + '</b><br><span class="dim">' + p.mb + ' MB' + (p.pack === 'imagery' ? ' · satellite photos. Show them on the map with the button, then zoom in.' : '') + '</span></span>' + (p.pack === 'imagery' ? '<button data-sat="' + esc(p.id) + '">Show on map</button>' : '') + '<button class="dng" data-rm="' + esc(p.id) + '">Remove</button></div>').join('');
   box.innerHTML = '<p><b>' + ok + ' of ' + KNOWN.length + ' map packs added.</b>' + (missing.length ? ' <span class="dim">Still to add: ' + esc(missing.join(', ')) + '</span>' : ' Everything is in.') + '</p>' + rows.join('') + extra;
 }
 async function addPacks(files) {
@@ -602,6 +612,7 @@ async function addPacks(files) {
     paint();
   }
   if (msg) msg.textContent = 'Finished: ' + res.filter(r => r.ok).length + ' of ' + res.length + ' added.'; if (bar) bar.hidden = true;
+  if (res.some(r => r.ok && /photo/i.test(r.name)) && msg) msg.textContent += ' Photos are added but not switched on: tap "Show on map" next to the photo pack below, or tick Layers > Satellite photos and zoom in.';
   await boot(); await refreshPackList(); draw();
 }
 
@@ -612,10 +623,11 @@ function searchBox() {
     const out = []; if (M.base) M.base.towns.forEach(t => { if (t.n.toLowerCase().includes(v)) out.push({ t: t.n + ' (town)', lon: t.lon, lat: t.lat, k: 9 }); });
     M.pins.forEach(p => { if ((p.title || '').toLowerCase().includes(v) || (p.tags || []).some(x => x.toLowerCase().includes(v))) out.push({ t: (p.title || 'Pin') + ' (my pin)', lon: p.lon, lat: p.lat, k: 24 }); });
     const m = v.match(/^\s*(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)\s*$/); if (m) out.unshift({ t: 'Go to ' + m[1] + ', ' + m[2], lat: +m[1], lon: +m[2], k: 30 });
+    M.packs.filter(p => p.pack === 'imagery' && p.info && p.info.bbox && /photo|satell|imag/.test(v)).forEach(p => { const b = p.info.bbox; out.unshift({ t: 'Satellite photos: ' + p.name, lon: (b[0] + b[2]) / 2, lat: (b[1] + b[3]) / 2, k: 10, sat: 1 }); });
     if (M.places) { let n = 0; for (let i = 0; i < M.places.n && n < 8; i++) { const nm = M.places.nm[i]; if (nm && nm.toLowerCase().includes(v)) { out.push({ t: nm + ' (' + CATNAME[CATS[M.places.c[i]]] + ')', lon: M.places.lon[i], lat: M.places.lat[i], k: 40 }); n++; } } }
     box.innerHTML = out.slice(0, 12).map((r, i) => `<button data-i="${i}">${esc(r.t)}</button>`).join('') || '<div class="dim" style="padding:8px">Nothing found. Try a town name or coordinates like -26.2, 28.05</div>'; box.hidden = false; box._r = out;
   };
-  q.oninput = go; box.onclick = e => { const i = e.target.dataset && e.target.dataset.i; if (i == null) return; const r = box._r[i]; flyTo(r.lon, r.lat, r.k); box.hidden = true; q.value = ''; M.sel = { lon: r.lon, lat: r.lat }; draw(); };
+  q.oninput = go; box.onclick = e => { const i = e.target.dataset && e.target.dataset.i; if (i == null) return; const r = box._r[i]; if (r.sat) { P.layers.sat = true; savePrefs(); } flyTo(r.lon, r.lat, r.k); box.hidden = true; q.value = ''; M.sel = { lon: r.lon, lat: r.lat }; draw(); };
 }
 
 /* ---------- GPS ---------- */
