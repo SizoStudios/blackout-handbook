@@ -637,6 +637,23 @@ async function importAll(file, replace) {
   // Display settings (theme, text size, language) stay as set on this device.
   return `Merged: ${sum.added} added, ${sum.updated} updated, ${sum.removed} removed.`;
 }
+async function paintStorage() {
+  const box = $('#stor'); if (!box) return; const L = LLM(), rows = []; let used = '';
+  try { const e = await navigator.storage.estimate(); used = `<p class="dim">This app is using about ${(e.usage / 1048576).toFixed(0)} MB of ${(e.quota / 1048576 / 1024).toFixed(1)} GB it may use here.</p>`; } catch (x) {}
+  let packs = []; try { packs = window.BHMap ? await window.BHMap.listPacks() : []; } catch (x) {}
+  for (const p of packs) rows.push(`<div class="row"><span class="grow"><b>${esc(p.name)}</b><br><span class="dim">Map pack · ${p.mb} MB</span></span><button class="dng" data-rmp="${esc(p.id)}">Remove</button></div>`);
+  if (packs.length > 1) rows.push('<div class="row"><button class="dng" id="rmAll">Remove all map packs</button></div>');
+  if (!packs.length) rows.push('<p class="dim">No map packs loaded.</p>');
+  if (L) { let st = null; try { st = await L.status(); } catch (x) {} if (st && st.installed) rows.push(`<div class="row"><span class="grow"><b>On-device AI pack</b><br><span class="dim">${st.sizeMB} MB on the phone · ${st.loaded ? 'loaded in memory now' : 'not in memory'}</span></span>${st.loaded ? '<button id="aiFree">Free memory</button>' : ''}<button class="dng" id="aiRm">Delete</button></div>`); else rows.push('<p class="dim">On-device AI pack: not installed.</p>'); } else rows.push('<p class="dim">On-device AI: only in the Android app.</p>');
+  box.innerHTML = used + rows.join('') + '<p class="dim">Removing a map pack or the AI pack frees space. You can add them again from the flash drive any time. Your supplies, notes, people, chats and pins are not touched.</p>';
+  box.onclick = async e => {
+    const b = e.target, id = b.dataset && b.dataset.rmp;
+    if (id) { if (!confirm('Remove this map pack from the device?')) return; await window.BHMap.removePackById(id); return paintStorage(); }
+    if (b.id === 'rmAll') { if (!confirm('Remove ALL map packs from this device? Your pins are kept.')) return; for (const p of await window.BHMap.listPacks()) await window.BHMap.removePackById(p.id); return paintStorage(); }
+    if (b.id === 'aiFree') { await L.unload(); return paintStorage(); }
+    if (b.id === 'aiRm') { if (!confirm('Delete the AI pack from this phone? You can install it again later.')) return; await L.deleteModel(); return paintStorage(); }
+  };
+}
 let deferredInstall = null;
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredInstall = e; });
 async function vData() {
@@ -656,9 +673,12 @@ async function vData() {
   <h2>Offline status</h2>
   <p>${offline ? `<span class="ok">Ready: ${installed ? 'this is the installed app, with everything inside it.' : 'this app is stored on the device and works with no signal.'}</span>` : 'Not yet installed for offline use on this device. See the README on the flash drive (start-laptop, or the phone steps), then reopen.'}</p>
   ${deferredInstall ? '<button id="inst" class="pri">Install as an app</button>' : ''}
+  <h2>Storage: what is loaded on this device</h2>
+  <div id="stor"><p class="dim">Checking…</p></div>
   <h2>Display</h2>
   <div class="row"><button id="th">Theme: ${theme}</button><button id="bg">Large text: ${big ? 'on' : 'off'}</button></div>
   <h2>About</h2><p class="dim">Version 0.1. Library: ${LIB.items.length} guides in ${LIB.cats.length} topics.</p>`;
+  paintStorage();
   $('#exp').onclick = async () => { await exportAll(); vData(); };
   const run = async rep => { const f = $('#imp').files[0]; if (!f) return alert('Choose a backup file first.'); if (rep && !confirm('This erases what is on this device first. Continue?')) return; try { alert(await importAll(f, rep)); vData(); } catch (e) { alert(e.message); } };
   $('#impm').onclick = () => run(false); $('#impr').onclick = () => run(true);

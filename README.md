@@ -12,17 +12,17 @@ Go to the **[Releases page](../../releases)**. There are two releases:
 
 | Release | What is in it |
 |---|---|
-| **App 2.6** | The Android app (`.apk`), the Windows app (`.zip`), and a lighter Android app for old 32-bit phones |
+| **App 2.7** | The Android app (`.apk`), the Windows app (`.zip`), and a lighter Android app for old 32-bit phones |
 | **Map packs** | The map data files (`.bhmap`). The app does not include the map, so you add these once |
 
 ### Android phone
-1. On your phone open the Releases page, then **App 2.6**, and tap `Blackout-Handbook-2.6.apk`.
+1. On your phone open the Releases page, then **App 2.7**, and tap `Blackout-Handbook-2.7.apk`.
 2. Open the downloaded file. Android asks to allow installs from your browser: allow it once.
 3. If Play Protect warns about an unknown app, choose **Install anyway**. The app is signed by its author, not by Google Play.
 4. Old 32-bit phone? Use `Blackout-Handbook-Lite-1.2.apk` instead (no AI, no map).
 
 ### Windows laptop
-1. Download `Blackout-Handbook-Windows-2.6.zip` and unzip it anywhere (or onto a USB stick).
+1. Download `Blackout-Handbook-Windows-2.7.zip` and unzip it anywhere (or onto a USB stick).
 2. Open the folder and double-click **Blackout Handbook.exe**. If Windows SmartScreen warns, choose *More info* then *Run anyway*.
 3. To keep your data on a USB stick, create an empty file called `portable.flag` next to the `.exe`.
 
@@ -30,7 +30,8 @@ Go to the **[Releases page](../../releases)**. There are two releases:
 1. Download the files from the **Map packs** release. You need `Base-Terrain-Places.bhmap` first. Add a `Roads-...` file for each country you want. `Roads-Overview.bhmap` shows main roads when zoomed out.
 2. `Routing.bhmap` (160 MB) is only for the Route planner. Skip it if you are short of space.
 3. In the app tap **Map**, then add the files (or Settings, then *Add a map pack*). The map starts with every layer off: tick what you want to see.
-4. Check a file with the numbers in `SHA256SUMS.txt` if a download looks damaged.
+4. In the app, Map, Settings, **Map packs** shows a tick for every pack that is in, and lists any you still need to add. Check a file with `SHA256SUMS.txt` if a download looks damaged.
+5. To free space, remove packs (or the AI pack) under **Data, then Storage**.
 
 You need about 70 MB free for the map without routing, or about 250 MB with it.
 

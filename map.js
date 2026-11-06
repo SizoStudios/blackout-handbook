@@ -518,30 +518,63 @@ function range(k, label, min, max, step, unit) { return `<label>${label}: <b id=
 function sel(k, label, opts) { return `<label>${label}</label><select data-s="${k}">${opts.map(([v, n]) => `<option value="${v}"${String(P[k]) === String(v) ? ' selected' : ''}>${n}</option>`).join('')}</select>`; }
 function tog(k, label) { return `<label class="lay"><input type="checkbox" data-t="${k}"${P[k] ? ' checked' : ''}><span><b>${label}</b></span></label>`; }
 function openSettings() {
-  const packs = M.packs.map(p => `<div class="row"><span class="grow"><b>${esc(p.name)}</b><br><span class="dim">${p.mb} MB · ${p.entries} parts · ${esc((p.created || '').slice(0, 10))}</span></span><button class="dng" data-rm="${esc(p.id)}">Remove</button></div>`).join('') || '<p class="dim">No map packs yet.</p>';
   const s = openSheet(`<div class="row"><b style="flex:1">Map settings</b><button id="shX">Close</button></div>
-  <h3>Map packs</h3>${packs}<label>Add a map pack from the flash drive (.bhmap)</label><input type="file" id="packIn" multiple><div class="bar" id="packBar" hidden><i></i></div><p class="dim" id="packMsg"></p>
+  <h3>Map packs</h3><div id="packList"><p class="dim">Checking what is on this device…</p></div><label>Add map packs from the flash drive or Downloads (.bhmap). You can choose several at once, and add the missing ones later.</label><input type="file" id="packIn" multiple><div class="bar" id="packBar" hidden><i></i></div><p class="dim" id="packMsg"></p><div id="packLog"></div>
   <h3>When the map opens</h3>${sel('start', 'Start the map at', [['last', 'Where I left it'], ['gps', 'My GPS position'], ['home', 'My home spot'], ['all', 'The whole region']])}<div class="row"><button id="setHome">Use the map centre as my home spot</button></div>
   <h3>Units and numbers</h3>${sel('units', 'Distances', [['km', 'Kilometres and metres'], ['mi', 'Miles and feet']])}${sel('coord', 'Coordinates', [['dec', 'Decimal degrees'], ['dms', 'Degrees, minutes, seconds']])}${sel('theme', 'Map colours', [['auto', 'Follow the app'], ['dark', 'Dark'], ['light', 'Light'], ['contrast', 'High contrast'], ['night', 'Night (red)']])}${sel('townMin', 'Towns shown', [['auto', 'Automatic by zoom'], ['all', 'All towns'], ['5k', 'Over 5,000 people'], ['20k', 'Over 20,000'], ['100k', 'Over 100,000']])}
   <h3>Sizes</h3>${range('icon', 'Icon size', 40, 320, 5, '%')}${range('label', 'Text size', 60, 260, 5, '%')}${range('line', 'Line thickness', 50, 320, 5, '%')}${tog('iconAuto', 'Icons grow and shrink as you zoom')}${tog('names', 'Show names of shops and buildings when zoomed in close')}<div class="row"><button id="szReset">Back to default sizes</button></div>
   <h3>Measuring and travel times</h3>${sel('measureAuto', 'Switch Measure off by itself after', [[0, 'Never'], [2, '2 minutes'], [10, '10 minutes'], [30, '30 minutes']])}${range('walk', 'Your walking speed (km/h, flat)', 2, 8, .1, ' km/h')}${range('climbH', 'Climb that costs you one hour of walking (m)', 200, 1200, 25, ' m')}${range('cycle', 'Cycling speed (km/h)', 6, 35, 1, ' km/h')}${range('car', 'Vehicle cruising speed on main roads (km/h)', 20, 130, 5, ' km/h')}${range('gravelFactor', 'Gravel and tracks run at this share of your speed', .2, 1, .05, '')}
   <h3>Pins</h3>${range('staleAmber', 'Pin turns amber after (days)', 30, 720, 10, ' d')}${range('staleRed', 'Pin turns red after (days)', 60, 1500, 10, ' d')}
   <h3>Other</h3>${tog('fps', 'Show draw time (for testing speed on this device)')}<div class="row"><button class="dng" id="clean">Back to clean (hide all layers and show the chooser)</button></div>`, 'tall');
+  refreshPackList();
   s.onclick = async e => {
     const t = e.target;
     if (t.id === 'shX') return closeSheet();
     if (t.id === 'setHome') { const lat = uny((M.CH / 2 - V.ty) / V.k), lon = unx((M.CW / 2 - V.tx) / V.k); P.home = [lon, lat]; savePrefs(); toast('Home spot saved'); }
     if (t.id === 'szReset') { P.icon = P.label = P.line = 100; P.iconAuto = true; savePrefs(); openSettings(); draw(); }
     if (t.id === 'clean') { if (!confirm('Hide every layer and show the "What do you want to see?" list again? Your pins are kept.')) return; P.layers = {}; firstRun = true; savePrefs(); openLayers(true); draw(); }
-    if (t.dataset && t.dataset.rm) { if (!confirm('Remove this map pack from the device?')) return; await removePack(t.dataset.rm); openSettings(); await boot(); }
+    if (t.dataset && t.dataset.rm) { if (!confirm('Remove this map pack from the device?')) return; await removePack(t.dataset.rm); await boot(); refreshPackList(); draw(); }
   };
   s.oninput = e => { const t = e.target, k = t.dataset && t.dataset.s; if (!k || t.type !== 'range') return; P[k] = +t.value; const b = $('#v_' + k); if (b) b.textContent = t.value + (k === 'icon' || k === 'label' || k === 'line' ? '%' : k.includes('Factor') ? '' : ''); savePrefs(); draw(); };
   s.onchange = e => { const t = e.target; if (t.dataset && t.dataset.s && t.tagName === 'SELECT') { const v = t.value; P[t.dataset.s] = isNaN(+v) || t.dataset.s === 'townMin' || t.dataset.s === 'theme' || t.dataset.s === 'units' || t.dataset.s === 'coord' || t.dataset.s === 'start' ? v : +v; savePrefs(); draw(); } if (t.dataset && t.dataset.t) { P[t.dataset.t] = t.checked; savePrefs(); draw(); } if (t.id === 'packIn') addPacks(t.files); };
 }
+const KNOWN = [
+  ['base:all', 'Base-Terrain-Places.bhmap', 'Base map, terrain and places', 5, 1], ['roads-ov:all', 'Roads-Overview.bhmap', 'Main roads when zoomed out', 1, 0],
+  ['roads:za', 'Roads-South-Africa.bhmap', 'Roads and tracks: South Africa', 49, 0], ['roads:ls', 'Roads-Lesotho.bhmap', 'Roads and tracks: Lesotho', 4, 0], ['roads:sz', 'Roads-Eswatini.bhmap', 'Roads and tracks: Eswatini', 2, 0],
+  ['roads:mz', 'Roads-Southern-Mozambique.bhmap', 'Roads and tracks: southern Mozambique', 3, 0], ['roads:bw', 'Roads-Botswana-south-of-22S.bhmap', 'Roads and tracks: Botswana (south of 22°S)', 3, 0], ['roads:na', 'Roads-Namibia-south-of-22S.bhmap', 'Roads and tracks: Namibia (south of 22°S)', 2, 0],
+  ['routing:all', 'Routing.bhmap', 'Road network for the Route planner', 160, 0]
+];
+async function checkPacks() {
+  const keys = await new Promise(res => { const out = []; try { const t = DB.db.transaction('mapdata', 'readonly'), r = t.objectStore('mapdata').openKeyCursor(); r.onsuccess = () => { const c = r.result; if (c) { out.push(c.key); c.continue(); } }; t.oncomplete = () => res(out); t.onerror = () => res(out); } catch (e) { res(out); } });
+  const have = {}; const add = id => have[id] = (have[id] || 0) + 1;
+  for (const k of keys) { if (k === 'base' || k === 'places' || k.startsWith('t/')) add('base:all'); else if (k === 'ov') add('roads-ov:all'); else if (k.startsWith('g/')) add('routing:all'); else if (k.startsWith('r/')) add('roads:' + k.split('/')[1]); }
+  return have;
+}
+async function refreshPackList() {
+  const box = $('#packList'); if (!box) return; const have = await checkPacks(), byId = Object.fromEntries(M.packs.map(p => [p.id, p]));
+  let ok = 0; const missing = [];
+  const rows = KNOWN.map(([id, file, name, mb, req]) => {
+    const p = byId[id], n = have[id] || 0; let st, cls;
+    if (p && n >= p.entries) { st = 'Added'; cls = 'ok'; ok++; }
+    else if (p || n) { st = 'Incomplete' + (p ? ' (' + n + ' of ' + p.entries + ' parts)' : '') + '. Add this file again.'; cls = 'bad'; missing.push(file); }
+    else { st = req ? 'Not added yet. Needed first.' : 'Not added yet'; cls = req ? 'bad' : 'soon'; missing.push(file); }
+    const mark = cls === 'ok' ? '✓' : cls === 'bad' ? '✗' : '○';
+    return '<div class="row"><b class="' + cls + '" style="width:1.3em">' + mark + '</b><span class="grow"><b>' + esc(name) + '</b><br><span class="dim">' + esc(file) + ' · about ' + mb + ' MB · <span class="' + cls + '">' + st + '</span></span></span>' + (p ? '<button class="dng" data-rm="' + esc(id) + '">Remove</button>' : '') + '</div>';
+  });
+  const extra = M.packs.filter(p => !KNOWN.some(k => k[0] === p.id)).map(p => '<div class="row"><b class="ok" style="width:1.3em">✓</b><span class="grow"><b>' + esc(p.name) + '</b><br><span class="dim">' + p.mb + ' MB</span></span><button class="dng" data-rm="' + esc(p.id) + '">Remove</button></div>').join('');
+  box.innerHTML = '<p><b>' + ok + ' of ' + KNOWN.length + ' map packs added.</b>' + (missing.length ? ' <span class="dim">Still to add: ' + esc(missing.join(', ')) + '</span>' : ' Everything is in.') + '</p>' + rows.join('') + extra;
+}
 async function addPacks(files) {
-  const bar = $('#packBar'), msg = $('#packMsg'); bar.hidden = false;
-  try { for (const f of files) { msg.textContent = 'Adding ' + f.name + '…'; const m = await importPack(f, (d, t) => { msg.textContent = `Adding ${f.name}: ${d} of ${t}`; }); msg.textContent = 'Added: ' + m.name; } await boot(); openSettings(); }
-  catch (e) { msg.textContent = 'Could not add the pack: ' + e.message; } finally { bar.hidden = true; }
+  const bar = $('#packBar'), msg = $('#packMsg'), log = $('#packLog'), res = []; if (bar) bar.hidden = false;
+  const list = [...files], paint = () => { if (log) log.innerHTML = res.map(r => '<div class="' + (r.ok ? 'ok' : 'bad') + '">' + (r.ok ? '✓ Added' : '✗ Failed') + ': ' + esc(r.name) + (r.ok ? '' : ' — ' + esc(r.err)) + '</div>').join(''); };
+  for (let i = 0; i < list.length; i++) {
+    const f = list[i]; if (msg) msg.textContent = 'File ' + (i + 1) + ' of ' + list.length + ': adding ' + f.name + '…';
+    try { await importPack(f, (d, t) => { if (msg) msg.textContent = 'File ' + (i + 1) + ' of ' + list.length + ': ' + f.name + ' (' + d + ' of ' + t + ' parts)'; }); res.push({ ok: true, name: f.name }); }
+    catch (e) { res.push({ ok: false, name: f.name, err: e && e.message ? e.message : 'unknown problem' }); }
+    paint();
+  }
+  if (msg) msg.textContent = 'Finished: ' + res.filter(r => r.ok).length + ' of ' + res.length + ' added.'; if (bar) bar.hidden = true;
+  await boot(); await refreshPackList(); draw();
 }
 
 /* ---------- finding things ---------- */
@@ -573,7 +606,7 @@ async function boot() {
 function noPacksHtml() {
   return `<div class="mp-empty"><h2>Map</h2><p>The map works with no internet, but it needs its map packs first. Copy them once from the flash drive.</p>
   <ol><li>On the flash drive open the <b>Map-Packs</b> folder.</li><li>Tap the button below and choose <b>Base-Terrain-Places.bhmap</b>, then the <b>Roads</b> files (South Africa first). You can pick several at once.</li><li>When it says Added, the map opens.</li></ol>
-  <input type="file" id="packIn" multiple><div class="bar" id="packBar" hidden><i></i></div><p class="dim" id="packMsg"></p>
+  <div id="packList"></div><input type="file" id="packIn" multiple><div class="bar" id="packBar" hidden><i></i></div><p class="dim" id="packMsg"></p><div id="packLog"></div>
   <p class="dim">Map data: OpenStreetMap contributors (ODbL), Natural Earth, AWS Terrain Tiles. The packs are only stored on this device.</p></div>`;
 }
 async function open(view, sub) {
@@ -582,7 +615,7 @@ async function open(view, sub) {
   M.pins = await kvGet('pins', []);
   const ok = await boot();
   if (!DB.db) { view.innerHTML = '<div class="mp-empty"><h2>Map</h2><p class="warn">This device would not let the app save data, so map packs cannot be stored here.</p></div>'; return; }
-  if (!ok) { view.innerHTML = noPacksHtml(); $('#packIn').onchange = async e => { await addPacks(e.target.files); if (M.base) open(view, sub); }; return; }
+  if (!ok) { view.innerHTML = noPacksHtml(); $('#packIn').onchange = async e => { await addPacks(e.target.files); if (M.base) open(view, sub); }; refreshPackList(); $('#packList').onclick = async e => { const b = e.target.dataset && e.target.dataset.rm; if (b) { await removePack(b); refreshPackList(); } }; return; }
   view.innerHTML = `<div class="mp" id="mp"><canvas id="mpc"></canvas>
   <div class="mp-top"><button id="mpL" class="pri">Layers</button><button id="mpS">Settings</button><input id="mpQ" type="search" placeholder="Find a town, pin or coordinates…" autocomplete="off"></div><div class="mp-find" id="mpFind" hidden></div>
   <div class="mp-fab"><button id="mpZin" aria-label="Zoom in">+</button><button id="mpZout" aria-label="Zoom out">−</button><button id="mpLoc" aria-label="My location">◎</button><button id="mpMeas" class="pill">Measure</button><button id="mpRt" class="pill">Route</button></div>
@@ -601,5 +634,5 @@ async function open(view, sub) {
 }
 function onResize() { if (!M.root || !document.body.contains(M.root)) return window.removeEventListener('resize', onResize); setSize(); draw(); }
 function leave() { document.body.classList.remove('mapmode'); clearTimeout(M.mTimer); }
-window.BHMap = { open, leave, M, mx, my, unx, uny, hav, kmPerPx, getRec, elevAt, flyTo, draw, openSheet, closeSheet, fmtKm, fmtM, fmtH, fmtCoord, toast, get P() { return P; }, V: () => V };
+window.BHMap = { listPacks: async () => { await loadPacks(); return M.packs; }, removePackById: id => removePack(id), open, leave, M, mx, my, unx, uny, hav, kmPerPx, getRec, elevAt, flyTo, draw, openSheet, closeSheet, fmtKm, fmtM, fmtH, fmtCoord, toast, get P() { return P; }, V: () => V };
 })();
