@@ -422,8 +422,10 @@ function bindPointer() {
     if (ptrs.size === 2 && pinch) { const [a, b] = [...ptrs.values()], d = Math.hypot(a[0] - b[0], a[1] - b[1]); zoomAt((pinch.k * d / pinch.d) / V.k, (a[0] + b[0]) / 2, (a[1] + b[1]) / 2); return; }
     if (start && ptrs.size === 1) { const dx = e.offsetX - start.x, dy = e.offsetY - start.y; if (Math.abs(dx) + Math.abs(dy) > 6) start.moved = true; if (start.moved) { V.tx = start.tx + dx; V.ty = start.ty + dy; saveView(); draw(); } }
   };
-  const up = e => { const was = start; ptrs.delete(e.pointerId); if (ptrs.size < 2) pinch = null; if (was && !was.moved && ptrs.size === 0 && Date.now() - was.t < 600) tap(e.offsetX, e.offsetY); if (ptrs.size === 0) start = null; };
-  cv.onpointerup = up; cv.onpointercancel = e => { ptrs.delete(e.pointerId); start = null; pinch = null; };
+  // After a pinch, the finger that stays down must start a fresh drag from where it is now, or the map jumps back to where that finger first touched.
+  const rebase = () => { if (ptrs.size === 1) { const p = [...ptrs.values()][0]; start = { x: p[0], y: p[1], t: 0, moved: true, tx: V.tx, ty: V.ty }; } else if (ptrs.size === 0) start = null; };
+  const up = e => { const was = start; ptrs.delete(e.pointerId); if (ptrs.size < 2) pinch = null; if (was && !was.moved && ptrs.size === 0 && Date.now() - was.t < 600) tap(e.offsetX, e.offsetY); rebase(); };
+  cv.onpointerup = up; cv.onpointercancel = e => { ptrs.delete(e.pointerId); if (ptrs.size < 2) pinch = null; rebase(); };
   cv.onwheel = e => { e.preventDefault(); zoomAt(e.deltaY < 0 ? 1.25 : 0.8, e.offsetX, e.offsetY); };
   cv.ondblclick = e => zoomAt(2, e.offsetX, e.offsetY);
 }
