@@ -433,7 +433,7 @@ async function vAsk() {
     if (!L) { box.innerHTML = `<div class="note"><b>On-device AI:</b> available in the Android app. On this device you get the guides, which are the more reliable source anyway.</div>`; return; }
     try { st = await L.status(); } catch (e) {}
     $('#askg').hidden = !hasModel(); $('#askph').hidden = !hasModel();
-    const be = await kvGet('aiBackend', 'cpu'), th = await kvGet('aiThreads', 4);
+    const be = await kvGet('aiBackend', 'cpu'), th = await kvGet('aiThreads', 4), scOn = (await kvGet('aiScores', {})) || {};
     box.innerHTML = hasModel()
       ? `<div class="note"><b>AI pack installed</b> (${st.sizeMB} MB)${st.loaded ? ', loaded (' + esc(st.backend) + ')' : ''}. It loads when you ask and frees itself after 10 idle minutes. Use <b>Guides only</b> to save battery.</div>
          <details><summary class="dim">AI settings</summary>
@@ -441,11 +441,15 @@ async function vAsk() {
          <label>CPU threads (try 4 first; changing it reloads the model)</label><select id="aith">${[2, 3, 4, 5, 6, 8].map(n => `<option value="${n}"${n === th ? ' selected' : ''}>${n}${n === 4 ? ' (standard)' : ''}</option>`).join('')}</select>
          <label>My own instructions for the AI (optional; used for every answer)</label><textarea id="aiextra" rows="4" placeholder="e.g. Put every numbered step on its own line. Keep answers under 100 words. Always give metric units.">${esc(await kvGet('aiExtra', ''))}</textarea>
          <p class="dim">Write them as plain sentences. They are added to the AI's built-in rules and never replace its safety rules. Saved on this device only.</p>
+         <label>Reliability scores (off by default)</label>
+         <p class="dim">A percentage can sound more certain than it is, so these are off until you switch them on. They are estimates, never a guarantee: use them as one clue next to your own judgement.</p>
+         ${SCORES.map(x => `<label style="display:flex;gap:10px;color:var(--fg);align-items:flex-start;margin:6px 0"><input type="checkbox" class="sc" data-id="${x.id}"${scOn[x.id] ? ' checked' : ''} style="width:22px;height:22px;flex:0 0 auto"><span><b>${esc(x.name)}</b><br><span class="dim">${esc(x.info)} ${x.kind === 'app' ? 'Worked out by the app.' : 'Rated by the AI.'}</span></span></label>`).join('')}
          <div class="row"><button id="aiunload">Free memory now</button><button class="dng" id="aidel">Delete the AI pack</button></div></details>`
       : `<div class="note"><b>On-device AI: not installed.</b> ${window.BHLLM && !isNative() ? 'Choose the model file (<code>.litertlm</code>, about 3.7 GB) from the flash drive (Models folder). It is copied onto this computer once.' : 'Copy the model file (<code>.litertlm</code>, about 3.7 GB) to the phone, then choose it here.'} You need about ${Math.round((3700 + 300))} MB free${st ? ' (you have ' + st.freeMB + ' MB)' : ''}.</div>
          <div class="row"><button class="pri" id="aiinst">Install AI pack</button></div><p class="dim" id="ip"></p>`;
     if ($('#aibe')) $('#aibe').onchange = e => kvSet('aiBackend', e.target.value);
     if ($('#aith')) $('#aith').onchange = e => kvSet('aiThreads', +e.target.value);
+    document.querySelectorAll('.sc').forEach(c => c.onchange = async () => { const o = Object.assign({}, (await kvGet('aiScores', {})) || {}); o[c.dataset.id] = c.checked; await kvSet('aiScores', o); });
     if ($('#aiextra')) $('#aiextra').onchange = e => kvSet('aiExtra', e.target.value.trim().slice(0, 1200));
     if ($('#aiunload')) $('#aiunload').onclick = async () => { await L.unload(); paintBox(); };
     if ($('#aidel')) $('#aidel').onclick = async () => { if (confirm('Delete the AI pack from this phone? You can install it again later.')) { await L.deleteModel(); paintBox(); } };
@@ -471,10 +475,15 @@ async function vAsk() {
     const pic = photos.slice();
     window.BH_LAST_MODE = mode; // used for testing
     const canAI = hasModel();
+    const gpref = await kvGet('askGuides', null), gopen = gpref === null ? !canAI : !!gpref;
+    // how strongly the guides match (0 to 100), worked out here and shown only if the Handbook Support Score is switched on
+    const support = !forAI.length ? 0 : mode === 'grounded' ? Math.round(70 + 30 * Math.min(1, (top.s - STRONG_MATCH) / 30)) : Math.round(10 + 40 * Math.min(1, top.s / STRONG_MATCH));
     $('#ans').innerHTML = `<div class="msg me">${pic.map(u => `<img src="${u}" style="max-width:31%;border-radius:8px;margin:0 6px 6px 0">`).join('')}${pic.length ? '<br>' : ''}${esc(q || PHOTO_Q)}</div>
       ${canAI ? `<div id="aiout"></div>${withAI ? '' : '<div class="row"><button class="pri" id="aigo">Get an AI answer</button><span class="dim">Uses battery and warms the phone.</span></div>'}` : ''}
-      ${pic.length && !hits.length ? '' : `<div class="msg">${hits.length ? 'Most relevant guides:' : 'Nothing matched. Try different words.'}</div>`}${hits.map(i => itemCard(i, `<div class="snip">${snippet(i, q)}</div>`)).join('')}`;
-    const go = async () => { const g = $('#aigo'); if (g) g.disabled = true; await runAI(q, forAI, mode, await contextText(), async () => { await paintBox(); await paintChats(); }, follow, pic); if (g) g.disabled = false; };
+      ${pic.length && !hits.length ? '' : hits.length ? `<details id="gdet"${gopen ? ' open' : ''}><summary class="msg" style="cursor:pointer">Most relevant guides (${hits.length}) <span class="dim">tap to ${gopen ? 'hide' : 'show'}</span></summary>${hits.map(i => itemCard(i, `<div class="snip">${snippet(i, q)}</div>`)).join('')}</details>` : '<div class="msg">Nothing matched. Try different words.</div>'}`;
+    // remember whether the guides were left open or closed (the first time: closed when the AI is answering, open when it is not)
+    if ($('#gdet')) $('#gdet').querySelector('summary').onclick = () => setTimeout(() => { const d = $('#gdet'); if (d) { kvSet('askGuides', d.open); const h = d.querySelector('summary .dim'); if (h) h.textContent = 'tap to ' + (d.open ? 'hide' : 'show'); } }, 0);
+    const go = async () => { const g = $('#aigo'); if (g) g.disabled = true; await runAI(q, forAI, mode, await contextText(), async () => { await paintBox(); await paintChats(); }, follow, pic, { support }); if (g) g.disabled = false; };
     if ($('#aigo')) $('#aigo').onclick = go;
     if (canAI && withAI) go();
     if (pic.length) { photos = []; paintPhoto(); }
@@ -516,7 +525,41 @@ const AI_TAG = {
   own: 'The AI’s own ideas. The handbook has no guide for this, so use your judgement and be careful.',
   photo: 'The AI’s reading of your photo. It can be wrong, especially for plants, mushrooms, animals, medicines and injuries. Never eat, drink or take anything on a photo identification alone.'
 };
-async function runAI(q, hits, mode, ctx, done, follow, photo) {
+// ---- Reliability scores (all OFF by default: a percentage can sound more certain than it is). ----
+// To add a new kind of score for any scenario, add ONE entry here: it shows up in Ask > AI settings by itself.
+//   kind 'ai'  = the AI rates it (we tell it to add a "SCORE <id>: <0-100>" line, which the app strips out and shows as a chip)
+//   kind 'app' = the app works it out itself (see `meta` in runAI)
+//   good 'high' = a high number is good news; good 'low' = a high number is bad news (for example risk)
+//   modes = which kinds of answer it applies to: grounded, mixed, own, photo
+const ALLMODES = ['grounded', 'mixed', 'own', 'photo'];
+const SCORES = [
+  { id: 'certainty', name: 'Certainty Score', kind: 'ai', good: 'high', modes: ALLMODES, ask: 'how sure you are that your advice is correct (0 = a pure guess, 100 = certain)', info: 'How sure the AI says it is.' },
+  { id: 'support', name: 'Handbook Support Score', kind: 'app', good: 'high', modes: ALLMODES, info: 'How strongly the handbook guides match your question. 0 means no guide matched.' },
+  { id: 'risk', name: 'Risk-if-Wrong Score', kind: 'ai', good: 'low', modes: ALLMODES, ask: 'how harmful it could be if your advice is wrong (0 = harmless, 100 = could kill or seriously injure)', info: 'How bad it could be if the advice is wrong. Here a LOW number is the good one.' },
+  { id: 'probability', name: 'Probability Score', kind: 'ai', good: 'high', modes: ['photo'], ask: 'the chance, in percent, that your best guess of what the thing is, is right', info: 'The AI\u2019s chance that its best guess about what is in the photo is right. Photos only.' },
+  { id: 'evidence', name: 'Evidence Score', kind: 'ai', good: 'high', modes: ['photo'], ask: 'how much of the clues needed to be sure can be seen in the photos (0 = almost none, 100 = everything needed)', info: 'Whether the photos show enough clues. Low means take more photos from other angles. Photos only.' }
+];
+const scoresOn = async () => { const o = (await kvGet('aiScores', {})) || {}; return SCORES.filter(x => o[x.id]); };
+const scoreInstr = (on, mode) => {
+  const a = on.filter(x => x.kind === 'ai' && x.modes.includes(mode)); if (!a.length) return '';
+  return ' SCORES: at the very end, after everything else, add one line per score in exactly this form and nothing else on the line: "SCORE <name>: <number from 0 to 100>". Be honest and never default to a high number: if you are guessing, give under 50. ' + a.map(x => `Use the name "${x.id}" for ${x.ask}.`).join(' ');
+};
+// Separates the answer from the SCORE lines the AI adds at the end (also while the answer is still being written).
+function splitScores(t) {
+  const m = /(^|\n)[ \t]*SCORE\b/i.exec(t); if (!m) return { body: t.replace(/\n[ \t]*S(C(O(R)?)?)?$/i, ''), vals: {} };
+  const vals = {}; t.slice(m.index).replace(/SCORE\s+([a-z]+)\s*[:=]\s*(\d{1,3})/gi, (_, id, n) => { vals[id.toLowerCase()] = Math.min(100, +n); return ''; });
+  return { body: t.slice(0, m.index), vals };
+}
+function scoreBox(on, mode, vals) {
+  const rows = on.filter(x => x.modes.includes(mode)).map(x => {
+    const v = vals[x.id], has = typeof v === 'number';
+    const band = !has ? 'soon' : x.good === 'high' ? (v >= 70 ? 'ok' : v >= 40 ? 'soon' : 'bad') : (v <= 30 ? 'ok' : v <= 60 ? 'soon' : 'bad');
+    const word = !has ? 'not given' : x.good === 'high' ? (v >= 70 ? 'high' : v >= 40 ? 'medium' : 'low') : (v <= 30 ? 'low' : v <= 60 ? 'medium' : 'high');
+    return `<div class="row"><span class="grow"><b>${esc(x.name)}</b><br><span class="dim">${esc(x.info)}</span></span><b class="${band}" style="white-space:nowrap">${has ? v + '%' : '\u2014'} <span class="dim">${word}</span></b></div>`;
+  });
+  return rows.length ? `<div class="card" id="aiscores"><b>Reliability scores</b> <span class="dim">(estimates, not guarantees)</span>${rows.join('')}<p class="dim">A number can sound surer than it is. Use it as one clue beside your own judgement and the guides.</p></div>` : '';
+}
+async function runAI(q, hits, mode, ctx, done, follow, photo, meta) {
   const L = LLM(), out = $('#aiout'); if (!L || !out) return;
   if (AI_NO_HARM.test(q)) {
     out.innerHTML = '<div class="msg">I will not help with making weapons or explosives. For protecting your group, see the Security and Weapons safety guides.</div>';
@@ -528,6 +571,7 @@ async function runAI(q, hits, mode, ctx, done, follow, photo) {
     <div class="msg" id="aitext" hidden></div><div class="row"><button id="aistop">Stop</button></div><p class="dim" id="aifoot"></p><div id="aifollow"></div>`;
   const txt = $('#aitext'), wait = $('#aiwait');
   const setStep = n => out.querySelectorAll('.steps span').forEach(s => { s.className = +s.dataset.s < n ? 'done' : +s.dataset.s === n ? 'on' : ''; });
+  let onScores = [];
   let tok = null, stopped = false, got = false, phase = isPhoto ? 'Loading the AI and its picture reader' : 'Loading the AI', shown = '', looped = false;
   const t0 = Date.now(), sec = ms => Math.round(ms / 1000);
   // A visible clock and step display, so a slow phone never looks frozen.
@@ -544,15 +588,17 @@ async function runAI(q, hits, mode, ctx, done, follow, photo) {
       if (looped) return;
       if (!got) { got = true; setStep(3); txt.hidden = false; }
       shown += ev.text; const cut = trimRepeat(shown);
-      if (cut !== null) { looped = true; shown = cut; txt.textContent = tidy(shown); stopped = true; L.stop().catch(() => {}); return; }
-      txt.textContent = tidy(shown);
+      if (cut !== null) { looped = true; shown = cut; txt.textContent = tidy(splitScores(shown).body); stopped = true; L.stop().catch(() => {}); return; }
+      txt.textContent = tidy(splitScores(shown).body);
     });
     const pw = isPhoto && photo.length > 1 ? photo.length + ' PHOTOS (all of the same subject, from different angles)' : 'THE PHOTO';
     const prompt = isPhoto ? (hits.length ? buildPrompt(q, hits, ctx).replace(/^GUIDES:/, 'POSSIBLY RELATED GUIDES (they may not apply to the photo):').replace(/QUESTION:/, 'QUESTION ABOUT ' + pw + ':') : `${ctx}QUESTION ABOUT ${pw}: ${q || PHOTO_Q}`)
       : mode === 'grounded' ? buildPrompt(q, hits, ctx)
       : mode === 'mixed' ? buildPrompt(q, hits, ctx).replace(/^GUIDES:/, 'POSSIBLY RELATED GUIDES (they may not answer the question):')
       : `${ctx}QUESTION: ${q}`;
-    const r = await L.generate({ system: await withExtra(isPhoto ? AI_SYSTEM_PHOTO : own ? AI_SYSTEM_OWN : AI_SYSTEM), prompt, maxTokens: isPhoto ? 340 : own ? 260 : 240, images: isPhoto ? photo : [] });
+    onScores = await scoresOn();
+    const sInstr = scoreInstr(onScores, mode), sExtra = sInstr ? 40 : 0;
+    const r = await L.generate({ system: (await withExtra(isPhoto ? AI_SYSTEM_PHOTO : own ? AI_SYSTEM_OWN : AI_SYSTEM)) + sInstr, prompt, maxTokens: (isPhoto ? 340 : own ? 260 : 240) + sExtra, images: isPhoto ? photo : [] });
     $('#aifoot').textContent = `${looped ? 'Stopped automatically because the AI began repeating itself. ' : (stopped || r.stopped ? 'Stopped. ' : '')}Load ${sec(ld.ms)} s${ld.reused ? ' (already loaded)' : ''}, first words after ${r.firstMs >= 0 ? sec(r.firstMs) : '?'} s, finished after ${sec(r.ms)} s (${ld.backend}, ${ld.threads} threads). ` + (own
       ? 'Treat the AI\u2019s own ideas as suggestions, not facts, and prefer the safest option.'
       : 'AI answers can be wrong: check the guides below.');
@@ -562,8 +608,13 @@ async function runAI(q, hits, mode, ctx, done, follow, photo) {
     clearInterval(tick);
     const th = $('#aithink'); if (th) th.hidden = true;
     if (tok) tok.remove(); const b = $('#aistop'); if (b) b.remove();
+    const sp = splitScores(shown), vals = Object.assign({}, sp.vals); if (meta && typeof meta.support === 'number') vals.support = meta.support;
+    const body = tidy(sp.body.trim());
+    if (txt && shown.trim()) txt.textContent = body;
+    const box = shown.trim() ? scoreBox(onScores, mode, vals) : ''; if (box) { const f0 = $('#aifollow'); if (f0) f0.insertAdjacentHTML('beforebegin', box); }
+    const sline = box ? '\n\nScores (estimates): ' + onScores.filter(x => x.modes.includes(mode)).map(x => x.name + ' ' + (typeof vals[x.id] === 'number' ? vals[x.id] + '%' : 'not given')).join(', ') : '';
     if (shown.trim()) {
-      const c = await saveChat(isPhoto ? '📷 ' + (q || PHOTO_Q) : q, tidy(shown.trim()), mode, hits.map(h => h.id));
+      const c = await saveChat(isPhoto ? '📷 ' + (q || PHOTO_Q) : q, body + sline, mode, hits.map(h => h.id));
       const f = $('#aifollow'); if (f) { f.innerHTML = '<div class="row"><button id="aifu">Ask a follow-up</button><span class="dim">Saved to your chats.</span></div>'; $('#aifu').onclick = () => follow && follow(c.id); }
     }
     if (done) done();
