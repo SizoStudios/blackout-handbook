@@ -342,9 +342,20 @@ const AI_SYSTEM_OWN = 'You are a calm survival helper for people in a long black
 const AI_SYSTEM_PHOTO = 'You are a calm survival helper for people in a long blackout in South Africa. The person has sent a PHOTO and may add a question. ' +
   'NEVER refuse or say you cannot see it. Write exactly these parts, short and plain: "What I can see:" one or two sentences; "My best guess:" what it most likely is, with one alternative if unsure; ' +
   '"What to do:" at most 4 short numbered steps, safest first, using any POSSIBLY RELATED GUIDES if they help; "How sure I am: low, medium or high, because ..." and the main risk if I am wrong. Then stop. ' +
+  'If several photos are given they show the same subject from different angles or close-ups: use them together, and if they still do not give enough clues, say exactly which extra photo would help (for example the underside of a leaf, the flower or fruit, the whole plant, the base or stem, or the label). ' +
   'For plants, berries, mushrooms, animals, insects, water, food, medicines, pills, wounds, rashes or anything electrical or chemical: never say it is safe to eat, drink, take or touch just from a photo; say what would make it safer to check. ' +
   'If the photo shows heavy bleeding, a snake bite, poisoning, fire or gas, put the life-saving action first. Do not invent exact doses or species names you are not fairly sure of. Never repeat yourself. Use British English.';
 const PHOTO_Q = 'What is this, and is it safe to use?';
+const MAX_PHOTOS = 10;
+// The model sometimes runs its numbered steps together in one paragraph: start each numbered step, and each labelled part, on its own line.
+function tidy(t) {
+  return String(t)
+    .replace(/([.:!?)])[ \t]+(\d{1,2}[.)])[ \t]+(?=\S)/g, '$1\n$2 ')
+    .replace(/([^\n])[ \t]+(?=(What I can see|My best guess|What to do|How sure I am|My own ideas \(not from the handbook\)):)/g, '$1\n\n')
+    .replace(/\n{3,}/g, '\n\n');
+}
+// Instructions Sizo writes himself (Ask > AI settings): added to every AI request.
+const withExtra = async sys => { const x = String(await kvGet('aiExtra', '') || '').trim().slice(0, 1200); return x ? sys + ' EXTRA INSTRUCTIONS FROM THE OWNER (follow these too, unless they would put someone in danger): ' + x : sys; };
 // The one thing the AI will not help with: making weapons or explosives.
 const AI_NO_HARM = /\b(make|build|construct|assemble|manufacture|improvise|homemade|home-made)\b.{0,40}\b(bomb|explosive|detonator|weapon|silencer|suppressor|ammunition|ammo)\b|\b(detonator|silencer|suppressor)\b/i;
 const STRONG_MATCH = 15; // below this, a guide is only "possibly related"
@@ -408,7 +419,7 @@ async function vAsk() {
   view.innerHTML = `<h1>Ask the library</h1>
   <p class="dim">Type a question. The matching guides appear straight away${L ? ', and the AI starts answering (uses battery)' : ''}.</p>
   <form id="askf" class="row"><input class="grow" id="askq" type="text" placeholder="e.g. how do I treat a burn?"><button class="pri" id="askgo">Ask</button><button type="button" id="askg" hidden>Guides only</button></form>
-  <div class="row" id="askph" hidden><span class="dim">Ask about a photo:</span><button type="button" id="askcam">Take photo</button><button type="button" id="askpic">Choose photo</button></div>
+  <div class="row" id="askph" hidden><span class="dim">Ask about photos (up to ${MAX_PHOTOS}):</span><button type="button" id="askcam">Take photo</button><button type="button" id="askpic">Choose photo</button></div>
   <div id="askpv"></div>
   <div id="ans" class="chat"></div>
   <details id="chatbox" style="margin-top:12px"><summary class="dim">Saved chats <span id="chatn"></span></summary><div id="chats"></div></details>
@@ -427,11 +438,14 @@ async function vAsk() {
          <details><summary class="dim">AI settings</summary>
          <label>Speed mode</label><select id="aibe"><option value="cpu"${be === 'cpu' ? ' selected' : ''}>Standard (CPU): safest</option><option value="gpu"${be === 'gpu' ? ' selected' : ''}>GPU: faster and gentler on battery, if your phone supports it</option></select>
          <label>CPU threads (try 4 first; changing it reloads the model)</label><select id="aith">${[2, 3, 4, 5, 6, 8].map(n => `<option value="${n}"${n === th ? ' selected' : ''}>${n}${n === 4 ? ' (standard)' : ''}</option>`).join('')}</select>
+         <label>My own instructions for the AI (optional; used for every answer)</label><textarea id="aiextra" rows="4" placeholder="e.g. Put every numbered step on its own line. Keep answers under 100 words. Always give metric units.">${esc(await kvGet('aiExtra', ''))}</textarea>
+         <p class="dim">Write them as plain sentences. They are added to the AI's built-in rules and never replace its safety rules. Saved on this device only.</p>
          <div class="row"><button id="aiunload">Free memory now</button><button class="dng" id="aidel">Delete the AI pack</button></div></details>`
       : `<div class="note"><b>On-device AI: not installed.</b> Copy the model file (<code>.litertlm</code>, about 3.7 GB) to the phone, then choose it here. You need about ${Math.round((3700 + 300))} MB free${st ? ' (you have ' + st.freeMB + ' MB)' : ''}.</div>
          <div class="row"><button class="pri" id="aiinst">Install AI pack</button></div><p class="dim" id="ip"></p>`;
     if ($('#aibe')) $('#aibe').onchange = e => kvSet('aiBackend', e.target.value);
     if ($('#aith')) $('#aith').onchange = e => kvSet('aiThreads', +e.target.value);
+    if ($('#aiextra')) $('#aiextra').onchange = e => kvSet('aiExtra', e.target.value.trim().slice(0, 1200));
     if ($('#aiunload')) $('#aiunload').onclick = async () => { await L.unload(); paintBox(); };
     if ($('#aidel')) $('#aidel').onclick = async () => { if (confirm('Delete the AI pack from this phone? You can install it again later.')) { await L.deleteModel(); paintBox(); } };
     if ($('#aiinst')) $('#aiinst').onclick = async () => {
@@ -446,28 +460,33 @@ async function vAsk() {
 
   // One tap: guides appear, and (if the AI is installed) the AI starts answering at once.
   const ask = async withAI => {
-    const q = $('#askq').value.trim(); if (!q && !photo) return;
+    const q = $('#askq').value.trim(); if (!q && !photos.length) return;
     const scored = q ? searchScored(q).slice(0, 5) : [], hits = scored.map(r => r.i);
     // Guides the AI may use: the best one, plus the next only if nearly as relevant.
     const forAI = scored.filter((r, k) => k === 0 || (k === 1 && r.s >= scored[0].s * 0.8)).map(r => r.i);
     // grounded = a clearly matching guide; mixed = only loosely related guides; own = nothing relevant.
     const top = scored[0];
-    const mode = photo ? 'photo' : !forAI.length ? 'own' : (top.s >= STRONG_MATCH && top.n / top.t >= 0.6) ? 'grounded' : 'mixed';
-    const pic = photo;
+    const mode = photos.length ? 'photo' : !forAI.length ? 'own' : (top.s >= STRONG_MATCH && top.n / top.t >= 0.6) ? 'grounded' : 'mixed';
+    const pic = photos.slice();
     window.BH_LAST_MODE = mode; // used for testing
     const canAI = hasModel();
-    $('#ans').innerHTML = `<div class="msg me">${pic ? `<img src="${pic}" style="max-width:60%;border-radius:8px;display:block;margin-bottom:6px">` : ''}${esc(q || PHOTO_Q)}</div>
+    $('#ans').innerHTML = `<div class="msg me">${pic.map(u => `<img src="${u}" style="max-width:31%;border-radius:8px;margin:0 6px 6px 0">`).join('')}${pic.length ? '<br>' : ''}${esc(q || PHOTO_Q)}</div>
       ${canAI ? `<div id="aiout"></div>${withAI ? '' : '<div class="row"><button class="pri" id="aigo">Get an AI answer</button><span class="dim">Uses battery and warms the phone.</span></div>'}` : ''}
-      ${pic && !hits.length ? '' : `<div class="msg">${hits.length ? 'Most relevant guides:' : 'Nothing matched. Try different words.'}</div>`}${hits.map(i => itemCard(i, `<div class="snip">${snippet(i, q)}</div>`)).join('')}`;
+      ${pic.length && !hits.length ? '' : `<div class="msg">${hits.length ? 'Most relevant guides:' : 'Nothing matched. Try different words.'}</div>`}${hits.map(i => itemCard(i, `<div class="snip">${snippet(i, q)}</div>`)).join('')}`;
     const go = async () => { const g = $('#aigo'); if (g) g.disabled = true; await runAI(q, forAI, mode, await contextText(), async () => { await paintBox(); await paintChats(); }, follow, pic); if (g) g.disabled = false; };
     if ($('#aigo')) $('#aigo').onclick = go;
     if (canAI && withAI) go();
-    if (pic) { photo = null; paintPhoto(); }
+    if (pic.length) { photos = []; paintPhoto(); }
   };
   // Photo for the AI: taken with the camera or chosen from the gallery, shrunk first so it is quicker to read.
-  let photo = null;
-  const paintPhoto = () => { $('#askpv').innerHTML = photo ? `<div class="card"><img src="${photo}" style="max-width:100%;max-height:220px;border-radius:8px"><div class="row"><button type="button" id="askpx">Remove photo</button><span class="dim">Type a question about it, or just tap Ask.</span></div></div>` : ''; if ($('#askpx')) $('#askpx').onclick = () => { photo = null; paintPhoto(); }; };
-  const takePhoto = async cam => { const d = await getPhoto(cam); if (d) { photo = d; paintPhoto(); $('#askq').placeholder = 'About this photo (optional)'; } };
+  let photos = [];
+  const paintPhoto = () => {
+    $('#askpv').innerHTML = photos.length ? `<div class="card"><div style="display:flex;flex-wrap:wrap;gap:8px">${photos.map((u, i) => `<div style="position:relative"><img src="${u}" style="height:90px;border-radius:8px;display:block"><button type="button" class="askpx" data-i="${i}" style="position:absolute;top:2px;right:2px;padding:2px 8px;min-height:0">✕</button></div>`).join('')}</div>
+      <div class="row"><button type="button" id="askpall">Remove all</button><span class="dim">${photos.length} of ${MAX_PHOTOS} photos. Add more angles if one is not enough. Type a question, or just tap Ask.</span></div></div>` : '';
+    document.querySelectorAll('.askpx').forEach(b => b.onclick = () => { photos.splice(+b.dataset.i, 1); paintPhoto(); });
+    if ($('#askpall')) $('#askpall').onclick = () => { photos = []; paintPhoto(); };
+  };
+  const takePhoto = async cam => { if (photos.length >= MAX_PHOTOS) { alert('Up to ' + MAX_PHOTOS + ' photos at a time.'); return; } const d = await getPhoto(cam); if (d) { photos.push(d); paintPhoto(); $('#askq').placeholder = 'About these photos (optional)'; } };
   $('#askcam').onclick = () => takePhoto(true); $('#askpic').onclick = () => takePhoto(false);
   // After an answer: "Ask a follow-up" ticks that chat as background and returns to the question box.
   const follow = id => { if (!ctxIds.includes(id)) { ctxIds.push(id); while (ctxIds.length > MAX_CTX) ctxIds.shift(); } paintChats(); const i = $('#askq'); i.value = ''; i.placeholder = 'Your follow-up question…'; i.focus(); window.scrollTo(0, 0); };
@@ -499,7 +518,7 @@ async function runAI(q, hits, mode, ctx, done, follow, photo) {
     out.innerHTML = '<div class="msg">I will not help with making weapons or explosives. For protecting your group, see the Security and Weapons safety guides.</div>';
     return;
   }
-  const own = mode !== 'grounded', isPhoto = mode === 'photo' && !!photo;
+  const own = mode !== 'grounded', isPhoto = mode === 'photo' && !!photo && photo.length > 0;
   out.innerHTML = `<div class="${own ? 'warn' : 'note'}" id="aitag">${AI_TAG[mode]}</div>
     <div class="think" id="aithink"><div class="steps"><span data-s="1" class="on">1 Loading</span><span data-s="2">2 Reading</span><span data-s="3">3 Writing</span></div><div class="bar"><i></i></div><p class="dim" id="aiwait"></p></div>
     <div class="msg" id="aitext" hidden></div><div class="row"><button id="aistop">Stop</button></div><p class="dim" id="aifoot"></p><div id="aifollow"></div>`;
@@ -521,14 +540,15 @@ async function runAI(q, hits, mode, ctx, done, follow, photo) {
       if (looped) return;
       if (!got) { got = true; setStep(3); txt.hidden = false; }
       shown += ev.text; const cut = trimRepeat(shown);
-      if (cut !== null) { looped = true; shown = cut; txt.textContent = shown; stopped = true; L.stop().catch(() => {}); return; }
-      txt.textContent = shown;
+      if (cut !== null) { looped = true; shown = cut; txt.textContent = tidy(shown); stopped = true; L.stop().catch(() => {}); return; }
+      txt.textContent = tidy(shown);
     });
-    const prompt = isPhoto ? (hits.length ? buildPrompt(q, hits, ctx).replace(/^GUIDES:/, 'POSSIBLY RELATED GUIDES (they may not apply to the photo):').replace(/QUESTION:/, 'QUESTION ABOUT THE PHOTO:') : `${ctx}QUESTION ABOUT THE PHOTO: ${q || PHOTO_Q}`)
+    const pw = isPhoto && photo.length > 1 ? photo.length + ' PHOTOS (all of the same subject, from different angles)' : 'THE PHOTO';
+    const prompt = isPhoto ? (hits.length ? buildPrompt(q, hits, ctx).replace(/^GUIDES:/, 'POSSIBLY RELATED GUIDES (they may not apply to the photo):').replace(/QUESTION:/, 'QUESTION ABOUT ' + pw + ':') : `${ctx}QUESTION ABOUT ${pw}: ${q || PHOTO_Q}`)
       : mode === 'grounded' ? buildPrompt(q, hits, ctx)
       : mode === 'mixed' ? buildPrompt(q, hits, ctx).replace(/^GUIDES:/, 'POSSIBLY RELATED GUIDES (they may not answer the question):')
       : `${ctx}QUESTION: ${q}`;
-    const r = await L.generate({ system: isPhoto ? AI_SYSTEM_PHOTO : own ? AI_SYSTEM_OWN : AI_SYSTEM, prompt, maxTokens: isPhoto ? 320 : own ? 260 : 240, image: isPhoto ? photo : '' });
+    const r = await L.generate({ system: await withExtra(isPhoto ? AI_SYSTEM_PHOTO : own ? AI_SYSTEM_OWN : AI_SYSTEM), prompt, maxTokens: isPhoto ? 340 : own ? 260 : 240, images: isPhoto ? photo : [] });
     $('#aifoot').textContent = `${looped ? 'Stopped automatically because the AI began repeating itself. ' : (stopped || r.stopped ? 'Stopped. ' : '')}Load ${sec(ld.ms)} s${ld.reused ? ' (already loaded)' : ''}, first words after ${r.firstMs >= 0 ? sec(r.firstMs) : '?'} s, finished after ${sec(r.ms)} s (${ld.backend}, ${ld.threads} threads). ` + (own
       ? 'Treat the AI\u2019s own ideas as suggestions, not facts, and prefer the safest option.'
       : 'AI answers can be wrong: check the guides below.');
@@ -539,7 +559,7 @@ async function runAI(q, hits, mode, ctx, done, follow, photo) {
     const th = $('#aithink'); if (th) th.hidden = true;
     if (tok) tok.remove(); const b = $('#aistop'); if (b) b.remove();
     if (shown.trim()) {
-      const c = await saveChat(isPhoto ? '📷 ' + (q || PHOTO_Q) : q, shown.trim(), mode, hits.map(h => h.id));
+      const c = await saveChat(isPhoto ? '📷 ' + (q || PHOTO_Q) : q, tidy(shown.trim()), mode, hits.map(h => h.id));
       const f = $('#aifollow'); if (f) { f.innerHTML = '<div class="row"><button id="aifu">Ask a follow-up</button><span class="dim">Saved to your chats.</span></div>'; $('#aifu').onclick = () => follow && follow(c.id); }
     }
     if (done) done();
