@@ -584,10 +584,28 @@ const KNOWN = [
   ['roads:mz', 'Roads-Southern-Mozambique.bhmap', 'Roads and tracks: southern Mozambique', 3, 0], ['roads:bw', 'Roads-Botswana-south-of-22S.bhmap', 'Roads and tracks: Botswana (south of 22°S)', 3, 0], ['roads:na', 'Roads-Namibia-south-of-22S.bhmap', 'Roads and tracks: Namibia (south of 22°S)', 2, 0],
   ['routing:all', 'Routing.bhmap', 'Road network for the Route planner', 160, 0]
 ];
+// satellite photo packs: optional, listed on their own and not counted in "x of y"
+const PHOTOS = [
+  ['imagery:cape', 'Photos-Cape-Region.bhmap', 'Photos: Cape Town, the Peninsula and the mountains beyond', 60],
+  ['imagery:capepen', 'Photos-CapePeninsula.bhmap', 'Photos: Cape Peninsula only', 16],
+  ['imagery:gauteng', 'Photos-Gauteng.bhmap', 'Photos: all of Gauteng', 104],
+  ['imagery:nwest', 'Photos-NorthWest-Springs.bhmap', 'Photos: North-West springs area', 24],
+  ['imagery:lesotho', 'Photos-Lesotho-Belt.bhmap', 'Photos: Lesotho and a 20 km belt around it', 213],
+  ['imagery:durban', 'Photos-Durban-Pietermaritzburg.bhmap', 'Photos: Durban, Pietermaritzburg and the coast', 38],
+  ['imagery:ec1', 'Photos-EastLondon-Pilot.bhmap', 'Photos: East London, Qonce and the coast to Hamburg', 25]
+];
+const COVERED_BY = { 'imagery:capepen': 'imagery:cape' };   // the Cape Region photos already include the Peninsula
+async function peekPack(file) {
+  try {
+    const head = new Uint8Array(await file.slice(0, 11).arrayBuffer());
+    if (String.fromCharCode(...head.slice(0, 6)) !== 'BHMAP1') return null;
+    const hl = new DataView(head.buffer).getUint32(7, true); return JSON.parse(await file.slice(11, 11 + hl).text());
+  } catch (e) { return null; }
+}
 async function checkPacks() {
   const keys = await new Promise(res => { const out = []; try { const t = DB.db.transaction('mapdata', 'readonly'), r = t.objectStore('mapdata').openKeyCursor(); r.onsuccess = () => { const c = r.result; if (c) { out.push(c.key); c.continue(); } }; t.oncomplete = () => res(out); t.onerror = () => res(out); } catch (e) { res(out); } });
   const have = {}; const add = id => have[id] = (have[id] || 0) + 1;
-  for (const k of keys) { if (k === 'base' || k === 'places' || k.startsWith('t/')) add('base:all'); else if (k === 'ov') add('roads-ov:all'); else if (k.startsWith('g/')) add('routing:all'); else if (k.startsWith('r/')) add('roads:' + k.split('/')[1]); }
+  for (const k of keys) { if (k === 'base' || k === 'places' || k.startsWith('t/')) add('base:all'); else if (k === 'ov') add('roads-ov:all'); else if (k.startsWith('g/')) add('routing:all'); else if (k.startsWith('r/')) add('roads:' + k.split('/')[1]); else if (k.startsWith('i/')) add('imagery:' + k.split('/')[1]); }
   return have;
 }
 async function refreshPackList() {
@@ -601,20 +619,37 @@ async function refreshPackList() {
     const mark = cls === 'ok' ? '✓' : cls === 'bad' ? '✗' : '○';
     return '<div class="row"><b class="' + cls + '" style="width:1.3em">' + mark + '</b><span class="grow"><b>' + esc(name) + '</b><br><span class="dim">' + esc(file) + ' · about ' + mb + ' MB · <span class="' + cls + '">' + st + '</span></span></span>' + (p ? '<button class="dng" data-rm="' + esc(id) + '">Remove</button>' : '') + '</div>';
   });
-  const extra = M.packs.filter(p => !KNOWN.some(k => k[0] === p.id)).map(p => '<div class="row"><b class="ok" style="width:1.3em">✓</b><span class="grow"><b>' + esc(p.name) + '</b><br><span class="dim">' + p.mb + ' MB' + (p.pack === 'imagery' ? ' · satellite photos. Show them on the map with the button, then zoom in.' : '') + '</span></span>' + (p.pack === 'imagery' ? '<button data-sat="' + esc(p.id) + '">Show on map</button>' : '') + '<button class="dng" data-rm="' + esc(p.id) + '">Remove</button></div>').join('');
-  box.innerHTML = '<p><b>' + ok + ' of ' + KNOWN.length + ' map packs added.</b>' + (missing.length ? ' <span class="dim">Still to add: ' + esc(missing.join(', ')) + '</span>' : ' Everything is in.') + '</p>' + rows.join('') + extra;
+  const done = id => byId[id] && (have[id] || 0) >= byId[id].entries;
+  const photoRows = PHOTOS.map(([id, file, name, mb]) => {
+    const p = byId[id], n = have[id] || 0, covered = COVERED_BY[id] && done(COVERED_BY[id]); let st, cls;
+    if (p && n >= p.entries) { st = 'Added' + (covered ? '. The Cape Region photos already cover this area: you can remove this one to save space.' : ''); cls = 'ok'; }
+    else if (p || n) { st = 'Incomplete' + (p ? ' (' + n + ' of ' + p.entries + ' parts)' : '') + '. Add this file again.'; cls = 'bad'; }
+    else if (covered) { st = 'Not needed: the Cape Region photos already cover this area'; cls = 'soon'; }
+    else { st = 'Not added yet (optional)'; cls = 'soon'; }
+    const mark = cls === 'ok' ? '✓' : cls === 'bad' ? '✗' : '○';
+    return '<div class="row"><b class="' + cls + '" style="width:1.3em">' + mark + '</b><span class="grow"><b>' + esc(name) + '</b><br><span class="dim">' + esc(file) + ' · about ' + mb + ' MB · <span class="' + cls + '">' + st + '</span></span></span>' + (p && n >= p.entries ? '<button data-sat="' + esc(id) + '">Show on map</button>' : '') + (p ? '<button class="dng" data-rm="' + esc(id) + '">Remove</button>' : '') + '</div>';
+  });
+  const extra = M.packs.filter(p => !KNOWN.some(k => k[0] === p.id) && !PHOTOS.some(k => k[0] === p.id)).map(p => '<div class="row"><b class="ok" style="width:1.3em">✓</b><span class="grow"><b>' + esc(p.name) + '</b><br><span class="dim">' + p.mb + ' MB' + (p.pack === 'imagery' ? ' · satellite photos. Show them on the map with the button, then zoom in.' : '') + '</span></span>' + (p.pack === 'imagery' ? '<button data-sat="' + esc(p.id) + '">Show on map</button>' : '') + '<button class="dng" data-rm="' + esc(p.id) + '">Remove</button></div>').join('');
+  box.innerHTML = '<p><b>' + ok + ' of ' + KNOWN.length + ' map packs added.</b>' + (missing.length ? ' <span class="dim">Still to add: ' + esc(missing.join(', ')) + '</span>' : ' Everything is in.') + '</p>' + rows.join('') + '<p style="margin-top:14px"><b>Satellite photos</b> <span class="dim">(optional: add only the areas you want)</span></p>' + photoRows.join('') + extra;
 }
 async function addPacks(files) {
   const bar = $('#packBar'), msg = $('#packMsg'), log = $('#packLog'), res = []; if (bar) bar.hidden = false;
-  const list = [...files], paint = () => { if (log) log.innerHTML = res.map(r => '<div class="' + (r.ok ? 'ok' : 'bad') + '">' + (r.ok ? '✓ Added' : '✗ Failed') + ': ' + esc(r.name) + (r.ok ? '' : ' — ' + esc(r.err)) + '</div>').join(''); };
+  const list = [...files], paint = () => { if (log) log.innerHTML = res.map(r => '<div class="' + (r.skipped ? 'dim' : r.ok ? 'ok' : 'bad') + '">' + (r.skipped ? '○ Skipped (' + (r.why || 'already on this device') + ')' : r.ok ? '✓ Added' : '✗ Failed') + ': ' + esc(r.name) + (r.ok ? '' : ' — ' + esc(r.err)) + (r.note ? '<br><span class="dim">' + esc(r.note) + '</span>' : '') + '</div>').join(''); };
   for (let i = 0; i < list.length; i++) {
-    const f = list[i]; if (msg) msg.textContent = 'File ' + (i + 1) + ' of ' + list.length + ': adding ' + f.name + '…';
-    try { await importPack(f, (d, t) => { if (msg) msg.textContent = 'File ' + (i + 1) + ' of ' + list.length + ': ' + f.name + ' (' + d + ' of ' + t + ' parts)'; }); res.push({ ok: true, name: f.name }); }
+    const f = list[i]; if (msg) msg.textContent = 'File ' + (i + 1) + ' of ' + list.length + ': checking ' + f.name + '…';
+    // already on this device? ask before spending minutes and battery on the same pack again
+    const hdr = await peekPack(f), id = hdr && hdr.pack + ':' + hdr.region, old = id && M.packs.find(p => p.id === id); let skip = false, note = '', why = '';
+    if (old) { const have = await checkPacks(); if ((have[id] || 0) >= old.entries && old.created === hdr.created) why = 'already on this device'; skip = !confirm('"' + (hdr.name || f.name) + '" is already on this device and complete. Adding it again changes nothing and takes a while. Add it again anyway?'); }
+    else if (id && COVERED_BY[id] && M.packs.some(p => p.id === COVERED_BY[id])) why = 'the Cape Region photos already cover it'; skip = !confirm('The Cape Region photos are already on this device and already cover the Peninsula. Add the Peninsula pack as well? It would use about 16 MB more and show nothing extra.');
+    if (skip) { res.push({ ok: true, skipped: true, why: why || 'already on this device', name: f.name }); paint(); continue; }
+    if (msg) msg.textContent = 'File ' + (i + 1) + ' of ' + list.length + ': adding ' + f.name + '…';
+    try { await importPack(f, (d, t) => { if (msg) msg.textContent = 'File ' + (i + 1) + ' of ' + list.length + ': ' + f.name + ' (' + d + ' of ' + t + ' parts)'; }); if (id && Object.values(COVERED_BY).includes(id) && M.packs.some(p => COVERED_BY[p.id] === id)) note = 'This pack covers the Cape Peninsula pack already on this device. You can remove the Peninsula pack in the list below to save 16 MB.'; res.push({ ok: true, name: f.name, note }); }
     catch (e) { res.push({ ok: false, name: f.name, err: e && e.message ? e.message : 'unknown problem' }); }
     paint();
   }
-  if (msg) msg.textContent = 'Finished: ' + res.filter(r => r.ok).length + ' of ' + res.length + ' added.'; if (bar) bar.hidden = true;
-  if (res.some(r => r.ok && /photo/i.test(r.name)) && msg) msg.textContent += ' Photos are added but not switched on: tap "Show on map" next to the photo pack below, or tick Layers > Satellite photos and zoom in.';
+  const nAdd = res.filter(r => r.ok && !r.skipped).length, nSkip = res.filter(r => r.skipped).length;
+  if (msg) msg.textContent = 'Finished: ' + nAdd + ' of ' + res.length + ' added' + (nSkip ? ', ' + nSkip + ' skipped because already on this device' : '') + '.'; if (bar) bar.hidden = true;
+  if (res.some(r => r.ok && !r.skipped && /photo/i.test(r.name)) && msg) msg.textContent += ' Photos are added but not switched on: tap "Show on map" next to the photo pack below, or tick Layers > Satellite photos and zoom in.';
   await boot(); await refreshPackList(); draw();
 }
 
