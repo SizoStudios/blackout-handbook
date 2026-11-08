@@ -338,6 +338,13 @@ const AI_SYSTEM_OWN = 'You are a calm survival helper for people in a long black
   'If POSSIBLY RELATED GUIDES are given, use anything useful from them. ' +
   'For doses, medicines, edible plants or mushrooms and other high-stakes topics: still give your best guidance, but be honest about uncertainty and prefer the safest cautious option. ' +
   'Never repeat yourself. Be short and plain. Use British English.';
+// Used when a photo is attached: describe, guess, say how sure, and never call something safe to eat or take from a photo alone.
+const AI_SYSTEM_PHOTO = 'You are a calm survival helper for people in a long blackout in South Africa. The person has sent a PHOTO and may add a question. ' +
+  'NEVER refuse or say you cannot see it. Write exactly these parts, short and plain: "What I can see:" one or two sentences; "My best guess:" what it most likely is, with one alternative if unsure; ' +
+  '"What to do:" at most 4 short numbered steps, safest first, using any POSSIBLY RELATED GUIDES if they help; "How sure I am: low, medium or high, because ..." and the main risk if I am wrong. Then stop. ' +
+  'For plants, berries, mushrooms, animals, insects, water, food, medicines, pills, wounds, rashes or anything electrical or chemical: never say it is safe to eat, drink, take or touch just from a photo; say what would make it safer to check. ' +
+  'If the photo shows heavy bleeding, a snake bite, poisoning, fire or gas, put the life-saving action first. Do not invent exact doses or species names you are not fairly sure of. Never repeat yourself. Use British English.';
+const PHOTO_Q = 'What is this, and is it safe to use?';
 // The one thing the AI will not help with: making weapons or explosives.
 const AI_NO_HARM = /\b(make|build|construct|assemble|manufacture|improvise|homemade|home-made)\b.{0,40}\b(bomb|explosive|detonator|weapon|silencer|suppressor|ammunition|ammo)\b|\b(detonator|silencer|suppressor)\b/i;
 const STRONG_MATCH = 15; // below this, a guide is only "possibly related"
@@ -401,6 +408,8 @@ async function vAsk() {
   view.innerHTML = `<h1>Ask the library</h1>
   <p class="dim">Type a question. The matching guides appear straight away${L ? ', and the AI starts answering (uses battery)' : ''}.</p>
   <form id="askf" class="row"><input class="grow" id="askq" type="text" placeholder="e.g. how do I treat a burn?"><button class="pri" id="askgo">Ask</button><button type="button" id="askg" hidden>Guides only</button></form>
+  <div class="row" id="askph" hidden><span class="dim">Ask about a photo:</span><button type="button" id="askcam">Take photo</button><button type="button" id="askpic">Choose photo</button></div>
+  <div id="askpv"></div>
   <div id="ans" class="chat"></div>
   <details id="chatbox" style="margin-top:12px"><summary class="dim">Saved chats <span id="chatn"></span></summary><div id="chats"></div></details>
   <div id="aibox"></div>`;
@@ -411,7 +420,7 @@ async function vAsk() {
     const box = $('#aibox'); if (!box) return;
     if (!L) { box.innerHTML = `<div class="note"><b>On-device AI:</b> available in the Android app. On this device you get the guides, which are the more reliable source anyway.</div>`; return; }
     try { st = await L.status(); } catch (e) {}
-    $('#askg').hidden = !hasModel();
+    $('#askg').hidden = !hasModel(); $('#askph').hidden = !hasModel();
     const be = await kvGet('aiBackend', 'cpu'), th = await kvGet('aiThreads', 4);
     box.innerHTML = hasModel()
       ? `<div class="note"><b>AI pack installed</b> (${st.sizeMB} MB)${st.loaded ? ', loaded (' + esc(st.backend) + ')' : ''}. It loads when you ask and frees itself after 10 idle minutes. Use <b>Guides only</b> to save battery.</div>
@@ -437,22 +446,29 @@ async function vAsk() {
 
   // One tap: guides appear, and (if the AI is installed) the AI starts answering at once.
   const ask = async withAI => {
-    const q = $('#askq').value.trim(); if (!q) return;
-    const scored = searchScored(q).slice(0, 5), hits = scored.map(r => r.i);
+    const q = $('#askq').value.trim(); if (!q && !photo) return;
+    const scored = q ? searchScored(q).slice(0, 5) : [], hits = scored.map(r => r.i);
     // Guides the AI may use: the best one, plus the next only if nearly as relevant.
     const forAI = scored.filter((r, k) => k === 0 || (k === 1 && r.s >= scored[0].s * 0.8)).map(r => r.i);
     // grounded = a clearly matching guide; mixed = only loosely related guides; own = nothing relevant.
     const top = scored[0];
-    const mode = !forAI.length ? 'own' : (top.s >= STRONG_MATCH && top.n / top.t >= 0.6) ? 'grounded' : 'mixed';
+    const mode = photo ? 'photo' : !forAI.length ? 'own' : (top.s >= STRONG_MATCH && top.n / top.t >= 0.6) ? 'grounded' : 'mixed';
+    const pic = photo;
     window.BH_LAST_MODE = mode; // used for testing
     const canAI = hasModel();
-    $('#ans').innerHTML = `<div class="msg me">${esc(q)}</div>
+    $('#ans').innerHTML = `<div class="msg me">${pic ? `<img src="${pic}" style="max-width:60%;border-radius:8px;display:block;margin-bottom:6px">` : ''}${esc(q || PHOTO_Q)}</div>
       ${canAI ? `<div id="aiout"></div>${withAI ? '' : '<div class="row"><button class="pri" id="aigo">Get an AI answer</button><span class="dim">Uses battery and warms the phone.</span></div>'}` : ''}
-      <div class="msg">${hits.length ? 'Most relevant guides:' : 'Nothing matched. Try different words.'}</div>${hits.map(i => itemCard(i, `<div class="snip">${snippet(i, q)}</div>`)).join('')}`;
-    const go = async () => { const g = $('#aigo'); if (g) g.disabled = true; await runAI(q, forAI, mode, await contextText(), async () => { await paintBox(); await paintChats(); }, follow); if (g) g.disabled = false; };
+      ${pic && !hits.length ? '' : `<div class="msg">${hits.length ? 'Most relevant guides:' : 'Nothing matched. Try different words.'}</div>`}${hits.map(i => itemCard(i, `<div class="snip">${snippet(i, q)}</div>`)).join('')}`;
+    const go = async () => { const g = $('#aigo'); if (g) g.disabled = true; await runAI(q, forAI, mode, await contextText(), async () => { await paintBox(); await paintChats(); }, follow, pic); if (g) g.disabled = false; };
     if ($('#aigo')) $('#aigo').onclick = go;
     if (canAI && withAI) go();
+    if (pic) { photo = null; paintPhoto(); }
   };
+  // Photo for the AI: taken with the camera or chosen from the gallery, shrunk first so it is quicker to read.
+  let photo = null;
+  const paintPhoto = () => { $('#askpv').innerHTML = photo ? `<div class="card"><img src="${photo}" style="max-width:100%;max-height:220px;border-radius:8px"><div class="row"><button type="button" id="askpx">Remove photo</button><span class="dim">Type a question about it, or just tap Ask.</span></div></div>` : ''; if ($('#askpx')) $('#askpx').onclick = () => { photo = null; paintPhoto(); }; };
+  const takePhoto = async cam => { const d = await getPhoto(cam); if (d) { photo = d; paintPhoto(); $('#askq').placeholder = 'About this photo (optional)'; } };
+  $('#askcam').onclick = () => takePhoto(true); $('#askpic').onclick = () => takePhoto(false);
   // After an answer: "Ask a follow-up" ticks that chat as background and returns to the question box.
   const follow = id => { if (!ctxIds.includes(id)) { ctxIds.push(id); while (ctxIds.length > MAX_CTX) ctxIds.shift(); } paintChats(); const i = $('#askq'); i.value = ''; i.placeholder = 'Your follow-up question…'; i.focus(); window.scrollTo(0, 0); };
   $('#askf').onsubmit = e => { e.preventDefault(); ask(true); };
@@ -474,21 +490,22 @@ function trimRepeat(text) {
 const AI_TAG = {
   grounded: 'Based on the handbook guides below.',
   mixed: 'Partly from the handbook, partly the AI’s own ideas. The AI’s own parts are less reliable.',
-  own: 'The AI’s own ideas. The handbook has no guide for this, so use your judgement and be careful.'
+  own: 'The AI’s own ideas. The handbook has no guide for this, so use your judgement and be careful.',
+  photo: 'The AI’s reading of your photo. It can be wrong, especially for plants, mushrooms, animals, medicines and injuries. Never eat, drink or take anything on a photo identification alone.'
 };
-async function runAI(q, hits, mode, ctx, done, follow) {
+async function runAI(q, hits, mode, ctx, done, follow, photo) {
   const L = LLM(), out = $('#aiout'); if (!L || !out) return;
   if (AI_NO_HARM.test(q)) {
     out.innerHTML = '<div class="msg">I will not help with making weapons or explosives. For protecting your group, see the Security and Weapons safety guides.</div>';
     return;
   }
-  const own = mode !== 'grounded';
+  const own = mode !== 'grounded', isPhoto = mode === 'photo' && !!photo;
   out.innerHTML = `<div class="${own ? 'warn' : 'note'}" id="aitag">${AI_TAG[mode]}</div>
     <div class="think" id="aithink"><div class="steps"><span data-s="1" class="on">1 Loading</span><span data-s="2">2 Reading</span><span data-s="3">3 Writing</span></div><div class="bar"><i></i></div><p class="dim" id="aiwait"></p></div>
     <div class="msg" id="aitext" hidden></div><div class="row"><button id="aistop">Stop</button></div><p class="dim" id="aifoot"></p><div id="aifollow"></div>`;
   const txt = $('#aitext'), wait = $('#aiwait');
   const setStep = n => out.querySelectorAll('.steps span').forEach(s => { s.className = +s.dataset.s < n ? 'done' : +s.dataset.s === n ? 'on' : ''; });
-  let tok = null, stopped = false, got = false, phase = 'Loading the AI', shown = '', looped = false;
+  let tok = null, stopped = false, got = false, phase = isPhoto ? 'Loading the AI and its picture reader' : 'Loading the AI', shown = '', looped = false;
   const t0 = Date.now(), sec = ms => Math.round(ms / 1000);
   // A visible clock and step display, so a slow phone never looks frozen.
   const tick = setInterval(() => {
@@ -498,8 +515,8 @@ async function runAI(q, hits, mode, ctx, done, follow) {
   wait.textContent = phase + '…';
   $('#aistop').onclick = async () => { stopped = true; try { await L.stop(); } catch (e) {} };
   try {
-    const ld = await L.load({ backend: await kvGet('aiBackend', 'cpu'), threads: await kvGet('aiThreads', 4) });
-    phase = 'Reading the guides and your question'; setStep(2);
+    const ld = await L.load({ backend: await kvGet('aiBackend', 'cpu'), threads: await kvGet('aiThreads', 4), vision: isPhoto });
+    phase = isPhoto ? 'Looking at your photo' : 'Reading the guides and your question'; setStep(2);
     tok = await L.addListener('token', ev => {
       if (looped) return;
       if (!got) { got = true; setStep(3); txt.hidden = false; }
@@ -507,10 +524,11 @@ async function runAI(q, hits, mode, ctx, done, follow) {
       if (cut !== null) { looped = true; shown = cut; txt.textContent = shown; stopped = true; L.stop().catch(() => {}); return; }
       txt.textContent = shown;
     });
-    const prompt = mode === 'grounded' ? buildPrompt(q, hits, ctx)
+    const prompt = isPhoto ? (hits.length ? buildPrompt(q, hits, ctx).replace(/^GUIDES:/, 'POSSIBLY RELATED GUIDES (they may not apply to the photo):').replace(/QUESTION:/, 'QUESTION ABOUT THE PHOTO:') : `${ctx}QUESTION ABOUT THE PHOTO: ${q || PHOTO_Q}`)
+      : mode === 'grounded' ? buildPrompt(q, hits, ctx)
       : mode === 'mixed' ? buildPrompt(q, hits, ctx).replace(/^GUIDES:/, 'POSSIBLY RELATED GUIDES (they may not answer the question):')
       : `${ctx}QUESTION: ${q}`;
-    const r = await L.generate({ system: own ? AI_SYSTEM_OWN : AI_SYSTEM, prompt, maxTokens: own ? 260 : 240 });
+    const r = await L.generate({ system: isPhoto ? AI_SYSTEM_PHOTO : own ? AI_SYSTEM_OWN : AI_SYSTEM, prompt, maxTokens: isPhoto ? 320 : own ? 260 : 240, image: isPhoto ? photo : '' });
     $('#aifoot').textContent = `${looped ? 'Stopped automatically because the AI began repeating itself. ' : (stopped || r.stopped ? 'Stopped. ' : '')}Load ${sec(ld.ms)} s${ld.reused ? ' (already loaded)' : ''}, first words after ${r.firstMs >= 0 ? sec(r.firstMs) : '?'} s, finished after ${sec(r.ms)} s (${ld.backend}, ${ld.threads} threads). ` + (own
       ? 'Treat the AI\u2019s own ideas as suggestions, not facts, and prefer the safest option.'
       : 'AI answers can be wrong: check the guides below.');
@@ -521,7 +539,7 @@ async function runAI(q, hits, mode, ctx, done, follow) {
     const th = $('#aithink'); if (th) th.hidden = true;
     if (tok) tok.remove(); const b = $('#aistop'); if (b) b.remove();
     if (shown.trim()) {
-      const c = await saveChat(q, shown.trim(), mode, hits.map(h => h.id));
+      const c = await saveChat(isPhoto ? '📷 ' + (q || PHOTO_Q) : q, shown.trim(), mode, hits.map(h => h.id));
       const f = $('#aifollow'); if (f) { f.innerHTML = '<div class="row"><button id="aifu">Ask a follow-up</button><span class="dim">Saved to your chats.</span></div>'; $('#aifu').onclick = () => follow && follow(c.id); }
     }
     if (done) done();
