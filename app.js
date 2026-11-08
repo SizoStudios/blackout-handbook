@@ -330,7 +330,7 @@ const AI_SYSTEM = 'You are a calm survival helper inside an offline handbook for
   'Base your answer on the GUIDES (and the SUPPLIES list if one is given) in the message, and use their exact numbers. ' +
   'If the guides only partly cover the question, say what they cover, then add a short section starting "My own ideas (not from the handbook):" with practical help you are fairly confident about. ' +
   'Be short and plain: at most 8 short numbered steps or about 150 words. If someone may be in danger (heavy bleeding, not breathing, poisoning, fire, gas), put the first life-saving action first. ' +
-  'Do not invent exact doses, quantities or species names that are not in the guides: if a number is missing, say so and give the safest practical rule instead. Never refuse; always help. Use British English.';
+  'If an exact dose, quantity or species name is not in the guides or sources, you may still give your best estimate, but label it "My own estimate (not from a source)", give a range, and name the main risk. Never refuse; always help. Use British English.';
 // Used when the guides barely cover the question: the model gives its own best ideas, honestly labelled.
 const AI_SYSTEM_OWN = 'You are a calm survival helper for people in a long blackout in South Africa who may have no other help. ' +
   'The handbook does not fully cover this question, so give your best practical ideas. NEVER refuse or say you cannot help. ' +
@@ -345,7 +345,7 @@ const AI_SYSTEM_PHOTO = 'You are a calm survival helper for people in a long bla
   '"What to do:" at most 4 short numbered steps, safest first, using any POSSIBLY RELATED GUIDES if they help; "How sure I am: low, medium or high, because ..." and the main risk if I am wrong. Then stop. ' +
   'If several photos are given they show the same subject from different angles or close-ups: use them together, and if they still do not give enough clues, say exactly which extra photo would help (for example the underside of a leaf, the flower or fruit, the whole plant, the base or stem, or the label). ' +
   'For plants, berries, mushrooms, animals, insects, water, food, medicines, pills, wounds, rashes or anything electrical or chemical: never say it is safe to eat, drink, take or touch just from a photo; say what would make it safer to check. ' +
-  'If the photo shows heavy bleeding, a snake bite, poisoning, fire or gas, put the life-saving action first. Do not invent exact doses or species names you are not fairly sure of. Never repeat yourself. Use British English.';
+  'If the photo shows heavy bleeding, a snake bite, poisoning, fire or gas, put the life-saving action first. If you give a dose or a species name that the photo does not clearly show, label it "My own estimate (not from a source)" and name the main risk. Never repeat yourself. Use British English.';
 const PHOTO_Q = 'What is this, and is it safe to use?';
 const MAX_PHOTOS = 10;
 // The model sometimes runs its numbered steps together in one paragraph: start each numbered step, and each labelled part, on its own line.
@@ -462,6 +462,7 @@ async function vAsk() {
     };
   };
   paintBox(); paintChats();
+  { const pf = await kvGet('askPrefill', ''); if (pf) { $('#askq').value = pf; kvSet('askPrefill', ''); } }
 
   // One tap: guides appear, and (if the AI is installed) the AI starts answering at once.
   const ask = async withAI => {
@@ -475,6 +476,7 @@ async function vAsk() {
     const pic = photos.slice();
     window.BH_LAST_MODE = mode; // used for testing
     const canAI = hasModel();
+    const med = canAI && window.BHMeds && q ? await window.BHMeds.context(q) : null;   // matching South African medicine cards and guideline extracts
     const gpref = await kvGet('askGuides', null), gopen = gpref === null ? !canAI : !!gpref;
     // how strongly the guides match (0 to 100), worked out here and shown only if the Handbook Support Score is switched on
     const support = !forAI.length ? 0 : mode === 'grounded' ? Math.round(70 + 30 * Math.min(1, (top.s - STRONG_MATCH) / 30)) : Math.round(10 + 40 * Math.min(1, top.s / STRONG_MATCH));
@@ -483,7 +485,7 @@ async function vAsk() {
       ${pic.length && !hits.length ? '' : hits.length ? `<details id="gdet"${gopen ? ' open' : ''}><summary class="msg" style="cursor:pointer">Most relevant guides (${hits.length}) <span class="dim">tap to ${gopen ? 'hide' : 'show'}</span></summary>${hits.map(i => itemCard(i, `<div class="snip">${snippet(i, q)}</div>`)).join('')}</details>` : '<div class="msg">Nothing matched. Try different words.</div>'}`;
     // remember whether the guides were left open or closed (the first time: closed when the AI is answering, open when it is not)
     if ($('#gdet')) $('#gdet').querySelector('summary').onclick = () => setTimeout(() => { const d = $('#gdet'); if (d) { kvSet('askGuides', d.open); const h = d.querySelector('summary .dim'); if (h) h.textContent = 'tap to ' + (d.open ? 'hide' : 'show'); } }, 0);
-    const go = async () => { const g = $('#aigo'); if (g) g.disabled = true; await runAI(q, forAI, mode, await contextText(), async () => { await paintBox(); await paintChats(); }, follow, pic, { support }); if (g) g.disabled = false; };
+    const go = async () => { const g = $('#aigo'); if (g) g.disabled = true; await runAI(q, forAI, mode, await contextText(), async () => { await paintBox(); await paintChats(); }, follow, pic, { support, med }); if (g) g.disabled = false; };
     if ($('#aigo')) $('#aigo').onclick = go;
     if (canAI && withAI) go();
     if (pic.length) { photos = []; paintPhoto(); }
@@ -566,7 +568,7 @@ async function runAI(q, hits, mode, ctx, done, follow, photo, meta) {
     return;
   }
   const own = mode !== 'grounded', isPhoto = mode === 'photo' && !!photo && photo.length > 0;
-  out.innerHTML = `<div class="${own ? 'warn' : 'note'}" id="aitag">${AI_TAG[mode]}</div>
+  out.innerHTML = `<div class="${own ? 'warn' : 'note'}" id="aitag">${AI_TAG[mode]}${meta && meta.med ? ' Official South African medicine extracts were given to the AI; anything outside them is the AI\u2019s own opinion and is labelled.' : ''}</div>
     <div class="think" id="aithink"><div class="steps"><span data-s="1" class="on">1 Loading</span><span data-s="2">2 Reading</span><span data-s="3">3 Writing</span></div><div class="bar"><i></i></div><p class="dim" id="aiwait"></p></div>
     <div class="msg" id="aitext" hidden></div><div class="row"><button id="aistop">Stop</button></div><p class="dim" id="aifoot"></p><div id="aifollow"></div>`;
   const txt = $('#aitext'), wait = $('#aiwait');
@@ -596,9 +598,12 @@ async function runAI(q, hits, mode, ctx, done, follow, photo, meta) {
       : mode === 'grounded' ? buildPrompt(q, hits, ctx)
       : mode === 'mixed' ? buildPrompt(q, hits, ctx).replace(/^GUIDES:/, 'POSSIBLY RELATED GUIDES (they may not answer the question):')
       : `${ctx}QUESTION: ${q}`;
+    const med = meta && meta.med;
+    const fullPrompt = med ? prompt.replace(/QUESTION(?: ABOUT[^:]*)?:/, m => 'SOUTH AFRICAN MEDICAL SOURCES (official guideline and medicine extracts):\n' + med.text + '\n\n' + m) : prompt;
+    const medRule = med ? ' MEDICAL SOURCES: the message contains official South African medicine and guideline extracts. When you give a dose or a medical fact that is in them, quote it and name the source (for example "PHC guideline 4.7"). If something the person needs is NOT in the extracts, do not hold back: give your best opinion, but begin that part with "My own opinion (not from the sources):" and say how sure you are.' : '';
     onScores = await scoresOn();
     const sInstr = scoreInstr(onScores, mode), sExtra = sInstr ? 40 : 0;
-    const r = await L.generate({ system: (await withExtra(isPhoto ? AI_SYSTEM_PHOTO : own ? AI_SYSTEM_OWN : AI_SYSTEM)) + sInstr, prompt, maxTokens: (isPhoto ? 340 : own ? 260 : 240) + sExtra, images: isPhoto ? photo : [] });
+    const r = await L.generate({ system: (await withExtra(isPhoto ? AI_SYSTEM_PHOTO : own ? AI_SYSTEM_OWN : AI_SYSTEM)) + sInstr + medRule, prompt: fullPrompt, maxTokens: (isPhoto ? 340 : own ? 260 : 240) + sExtra + (med ? 80 : 0), images: isPhoto ? photo : [] });
     $('#aifoot').textContent = `${looped ? 'Stopped automatically because the AI began repeating itself. ' : (stopped || r.stopped ? 'Stopped. ' : '')}Load ${sec(ld.ms)} s${ld.reused ? ' (already loaded)' : ''}, first words after ${r.firstMs >= 0 ? sec(r.firstMs) : '?'} s, finished after ${sec(r.ms)} s (${ld.backend}, ${ld.threads} threads). ` + (own
       ? 'Treat the AI\u2019s own ideas as suggestions, not facts, and prefer the safest option.'
       : 'AI answers can be wrong: check the guides below.');
@@ -612,6 +617,7 @@ async function runAI(q, hits, mode, ctx, done, follow, photo, meta) {
     const body = tidy(sp.body.trim());
     if (txt && shown.trim()) txt.textContent = body;
     const box = shown.trim() ? scoreBox(onScores, mode, vals) : ''; if (box) { const f0 = $('#aifollow'); if (f0) f0.insertAdjacentHTML('beforebegin', box); }
+    if (shown.trim() && meta && meta.med && meta.med.links.length) { const f1 = $('#aifollow'); if (f1) f1.insertAdjacentHTML('beforebegin', '<p class="dim">Sources used: ' + meta.med.links.map(l => `<a href="${l.href}">${esc(l.label)}</a>`).join(' \u00b7 ') + '</p>'); }
     const sline = box ? '\n\nScores (estimates): ' + onScores.filter(x => x.modes.includes(mode)).map(x => x.name + ' ' + (typeof vals[x.id] === 'number' ? vals[x.id] + '%' : 'not given')).join(', ') : '';
     if (shown.trim()) {
       const c = await saveChat(isPhoto ? '📷 ' + (q || PHOTO_Q) : q, body + sline, mode, hits.map(h => h.id));
@@ -806,6 +812,7 @@ function route() {
   else if (p[0] === 'phrases') vPhrases();
   else if (p[0] === 'ask') vAsk();
   else if (p[0] === 'data') vData();
+  else if (p[0] === 'meds') window.BHMeds.open(view, p.slice(1));
   else if (p[0] === 'map') window.BHMap.open(view, p.slice(1));
   else vHome();
   if (p[0] !== 'e') window.scrollTo(0, 0);
