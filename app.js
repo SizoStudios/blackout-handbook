@@ -324,7 +324,8 @@ async function vPhrases() {
 }
 
 /* ---------- Ask: guides first, optional on-device AI ---------- */
-const LLM = () => (isNative() && window.Capacitor.Plugins && window.Capacitor.Plugins.BlackoutLlm) || null;
+const LLM = () => (isNative() && window.Capacitor.Plugins && window.Capacitor.Plugins.BlackoutLlm) || window.BHLLM || null;
+const onPhone = () => isNative() || matchMedia('(pointer:coarse)').matches;   // laptop cameras are poor: the Windows app takes uploaded photos only
 const AI_SYSTEM = 'You are a calm survival helper inside an offline handbook for people living through a long blackout in South Africa. ' +
   'Base your answer on the GUIDES (and the SUPPLIES list if one is given) in the message, and use their exact numbers. ' +
   'If the guides only partly cover the question, say what they cover, then add a short section starting "My own ideas (not from the handbook):" with practical help you are fairly confident about. ' +
@@ -419,7 +420,7 @@ async function vAsk() {
   view.innerHTML = `<h1>Ask the library</h1>
   <p class="dim">Type a question. The matching guides appear straight away${L ? ', and the AI starts answering (uses battery)' : ''}.</p>
   <form id="askf" class="row"><input class="grow" id="askq" type="text" placeholder="e.g. how do I treat a burn?"><button class="pri" id="askgo">Ask</button><button type="button" id="askg" hidden>Guides only</button></form>
-  <div class="row" id="askph" hidden><span class="dim">Ask about photos (up to ${MAX_PHOTOS}):</span><button type="button" id="askcam">Take photo</button><button type="button" id="askpic">Choose photo</button></div>
+  <div class="row" id="askph" hidden><span class="dim">Ask about photos (up to ${MAX_PHOTOS}):</span>${onPhone() ? '<button type="button" id="askcam">Take photo</button>' : ''}<button type="button" id="askpic">${onPhone() ? 'Choose photo' : 'Upload photos'}</button><input type="file" id="askfile" accept="image/*" multiple hidden></div>
   <div id="askpv"></div>
   <div id="ans" class="chat"></div>
   <details id="chatbox" style="margin-top:12px"><summary class="dim">Saved chats <span id="chatn"></span></summary><div id="chats"></div></details>
@@ -436,12 +437,12 @@ async function vAsk() {
     box.innerHTML = hasModel()
       ? `<div class="note"><b>AI pack installed</b> (${st.sizeMB} MB)${st.loaded ? ', loaded (' + esc(st.backend) + ')' : ''}. It loads when you ask and frees itself after 10 idle minutes. Use <b>Guides only</b> to save battery.</div>
          <details><summary class="dim">AI settings</summary>
-         <label>Speed mode</label><select id="aibe"><option value="cpu"${be === 'cpu' ? ' selected' : ''}>Standard (CPU): safest</option><option value="gpu"${be === 'gpu' ? ' selected' : ''}>GPU: faster and gentler on battery, if your phone supports it</option></select>
+         <label>Speed mode</label><select id="aibe"><option value="cpu"${be === 'cpu' ? ' selected' : ''}>Standard (CPU): safest</option>${isNative() ? `<option value="gpu"${be === 'gpu' ? ' selected' : ''}>GPU: faster and gentler on battery, if your phone supports it</option>` : ''}</select>
          <label>CPU threads (try 4 first; changing it reloads the model)</label><select id="aith">${[2, 3, 4, 5, 6, 8].map(n => `<option value="${n}"${n === th ? ' selected' : ''}>${n}${n === 4 ? ' (standard)' : ''}</option>`).join('')}</select>
          <label>My own instructions for the AI (optional; used for every answer)</label><textarea id="aiextra" rows="4" placeholder="e.g. Put every numbered step on its own line. Keep answers under 100 words. Always give metric units.">${esc(await kvGet('aiExtra', ''))}</textarea>
          <p class="dim">Write them as plain sentences. They are added to the AI's built-in rules and never replace its safety rules. Saved on this device only.</p>
          <div class="row"><button id="aiunload">Free memory now</button><button class="dng" id="aidel">Delete the AI pack</button></div></details>`
-      : `<div class="note"><b>On-device AI: not installed.</b> Copy the model file (<code>.litertlm</code>, about 3.7 GB) to the phone, then choose it here. You need about ${Math.round((3700 + 300))} MB free${st ? ' (you have ' + st.freeMB + ' MB)' : ''}.</div>
+      : `<div class="note"><b>On-device AI: not installed.</b> ${window.BHLLM && !isNative() ? 'Choose the model file (<code>.litertlm</code>, about 3.7 GB) from the flash drive (Models folder). It is copied onto this computer once.' : 'Copy the model file (<code>.litertlm</code>, about 3.7 GB) to the phone, then choose it here.'} You need about ${Math.round((3700 + 300))} MB free${st ? ' (you have ' + st.freeMB + ' MB)' : ''}.</div>
          <div class="row"><button class="pri" id="aiinst">Install AI pack</button></div><p class="dim" id="ip"></p>`;
     if ($('#aibe')) $('#aibe').onchange = e => kvSet('aiBackend', e.target.value);
     if ($('#aith')) $('#aith').onchange = e => kvSet('aiThreads', +e.target.value);
@@ -487,7 +488,10 @@ async function vAsk() {
     if ($('#askpall')) $('#askpall').onclick = () => { photos = []; paintPhoto(); };
   };
   const takePhoto = async cam => { if (photos.length >= MAX_PHOTOS) { alert('Up to ' + MAX_PHOTOS + ' photos at a time.'); return; } const d = await getPhoto(cam); if (d) { photos.push(d); paintPhoto(); $('#askq').placeholder = 'About these photos (optional)'; } };
-  $('#askcam').onclick = () => takePhoto(true); $('#askpic').onclick = () => takePhoto(false);
+  // Computer: pick several image files at once.
+  const uploadPhotos = () => { const i = $('#askfile'); i.value = ''; i.onchange = async () => { const fs = [...i.files].slice(0, MAX_PHOTOS - photos.length); if (i.files.length > fs.length) alert('Up to ' + MAX_PHOTOS + ' photos at a time: the extra ones were left out.'); for (const f of fs) { const d = await shrink(f); if (d) photos.push(d); } paintPhoto(); $('#askq').placeholder = 'About these photos (optional)'; }; i.click(); };
+  if ($('#askcam')) $('#askcam').onclick = () => takePhoto(true);
+  $('#askpic').onclick = () => onPhone() ? takePhoto(false) : uploadPhotos();
   // After an answer: "Ask a follow-up" ticks that chat as background and returns to the question box.
   const follow = id => { if (!ctxIds.includes(id)) { ctxIds.push(id); while (ctxIds.length > MAX_CTX) ctxIds.shift(); } paintChats(); const i = $('#askq'); i.value = ''; i.placeholder = 'Your follow-up question…'; i.focus(); window.scrollTo(0, 0); };
   $('#askf').onsubmit = e => { e.preventDefault(); ask(true); };
