@@ -1,6 +1,6 @@
 {
-  "name": "Blackout Handbook",
-  "short_name": "Handbook",
+  "name": "Doomsday Gear",
+  "short_name": "Doomsday Gear",
   "description": "Offline survival library, supply tracker and phrasebook.",
   "start_url": "./",
   "scope": "./",

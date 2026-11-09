@@ -274,3 +274,14 @@ table{font-size:.9rem}
 .trow .viz{margin:0 6px}
 .tbig .viz{margin:0 6px}
 @media (max-width:640px){.taskpill span:not(.viz){display:none}.taskpill .viz{margin:0}}
+
+/* room under the chat: the typing box height plus a clear gap, so the newest text never sits behind it */
+:root{--cph:110px}
+body.ask{padding-bottom:calc(var(--navh) + var(--cph) + 56px + env(safe-area-inset-bottom))}
+body.ask #toast{bottom:calc(var(--navh) + var(--cph) + 16px + env(safe-area-inset-bottom))}
+#composer{padding-top:18px}
+
+/* app name across the top of both apps */
+#top{flex-wrap:wrap;row-gap:4px}
+#brand{flex:0 0 100%;text-align:center;font-size:.7rem;font-weight:800;letter-spacing:.22em;text-transform:uppercase;color:var(--acc);line-height:1;padding:2px 0 0}
+#taskPanel{top:calc(76px + env(safe-area-inset-top))}

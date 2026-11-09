@@ -468,14 +468,23 @@ window.BHTasks = Tasks; window.BHToast = appToast;
 /* ---------- Ask: a conversation, newest at the bottom, the box to type in stays at the bottom ---------- */
 const ASK = { turns: [], thread: null, photos: [], seq: 0, stick: true };
 // Keeps the newest text in view just above the typing box. Scrolling up by hand pauses it; scrolling back down (or asking again) resumes it.
-ASK.follow = true; ASK.last = null; ASK.prog = 0;
+ASK.follow = true; ASK.last = null; ASK.expect = -1; ASK.lastY = 0;
+const GAP = 40;   // blank space kept between the newest text and the typing box
 const composerTop = () => { const c = document.querySelector('#composer'); return c && !c.hidden ? c.getBoundingClientRect().top : window.innerHeight; };
+const overBy = el => el.getBoundingClientRect().bottom - (composerTop() - GAP);
 function followEl(el) {
   if (!el || !el.isConnected || !ASK.follow) return;
-  const over = el.getBoundingClientRect().bottom - (composerTop() - 16);
-  if (over > 1) { ASK.prog = Date.now(); window.scrollBy(0, over); }
+  const over = overBy(el);
+  if (over > 1) { window.scrollBy(0, over); ASK.expect = window.scrollY; }
 }
-window.addEventListener('scroll', () => { if (Date.now() - ASK.prog < 150 || !ASK.last || !ASK.last.isConnected) return; ASK.follow = ASK.last.getBoundingClientRect().bottom - (composerTop() - 16) < 100; }, { passive: true });
+// Following pauses only when the reader scrolls UP by hand, and resumes when they come back to the newest text.
+// The app's own scrolling is recognised by where it lands, so a slow phone cannot confuse the two.
+window.addEventListener('scroll', () => {
+  const y = window.scrollY, dy = y - ASK.lastY; ASK.lastY = y;
+  if (Math.abs(y - ASK.expect) < 3 || !ASK.last || !ASK.last.isConnected) return;
+  if (dy < -3) ASK.follow = false;
+  else if (overBy(ASK.last) < 60) ASK.follow = true;
+}, { passive: true });
 const SMALLTALK = [
   [/^(hi|hello|hey|hiya|howzit|heita|sawubona|molo|dumela|goeie\s?(more|middag|naand)|good\s(morning|afternoon|evening|day)|greetings|yo|sup)[\s!.,?]*$/i, ['Hi! What do you need help with?', 'Hello. Ask me anything: a guide, a medicine, a plant, or add a photo.']],
   [/^(how are you|how's it going|how are things|how r u)[\s!.?]*$/i, ['I am ready to help. What is going on?']],
@@ -501,7 +510,7 @@ async function vAsk() {
   const L = LLM(); let st = null; if (L) { try { st = await L.status(); } catch (e) { st = null; } }
   const hasModel = () => !!(st && st.installed);
   document.body.classList.add('ask');
-  if (!ASK.thread) { ASK.thread = document.createElement('div'); ASK.thread.className = 'thread'; ASK.thread.id = 'thread'; }
+  if (!ASK.thread) { ASK.thread = document.createElement('div'); ASK.thread.className = 'thread'; ASK.thread.id = 'thread'; if (window.ResizeObserver) new ResizeObserver(() => followEl(ASK.last)).observe(ASK.thread); }
   view.innerHTML = `<div class="askbar"><h1>Ask</h1><span class="grow"></span><button id="anew">New chat</button><button id="ahist">History <span id="chatn"></span></button><button id="aset" class="ico" aria-label="AI settings">&#9881;</button></div><div id="askpanel" hidden></div><div id="thold"></div>`;
   $('#thold').appendChild(ASK.thread);
   const welcome = () => { ASK.thread.innerHTML = `<div class="welcome"><div class="wtitle">Ask me anything</div><p class="dim">Type below. Matching guides appear with every answer${hasModel() ? ', and the AI replies like a conversation: just keep asking' : ''}.</p><div class="wchips">${['How do I treat a burn?', 'How do I purify water?', 'What do I do after a snake bite?', 'Signs of dehydration'].map(t => `<button class="wchip">${esc(t)}</button>`).join('')}</div></div>`; ASK.thread.querySelectorAll('.wchip').forEach(b => b.onclick = () => { const i = $('#askq'); i.value = b.textContent; i.focus(); ASK.draft = i.value; }); };
@@ -509,6 +518,7 @@ async function vAsk() {
 
   /* ---- the box at the bottom ---- */
   const cp = $('#composer'); cp.hidden = false; const aiPref = await kvGet('askAI', true);
+  if (window.ResizeObserver && !cp._ro) { cp._ro = new ResizeObserver(() => { document.documentElement.style.setProperty('--cph', Math.ceil(cp.getBoundingClientRect().height) + 'px'); followEl(ASK.last); }); cp._ro.observe(cp); }
   cp.innerHTML = `<div id="cpv"></div><div id="cmenu" hidden></div><input type="file" id="askfile" accept="image/*" multiple hidden>
     <div class="cbox">${hasModel() ? '<button id="cplus" aria-label="Add photos">+</button>' : ''}<textarea id="askq" rows="1" placeholder="Ask anything…" enterkeyhint="send"></textarea><button id="csend" class="pri" aria-label="Send">&#10148;</button></div>
     <div class="cmeta">${hasModel() ? `<label><input type="checkbox" id="cai"${aiPref ? ' checked' : ''}> AI answers</label>` : '<span class="dim">No AI installed: you get the matching guides. Open the gear to add it.</span>'}</div>`;
