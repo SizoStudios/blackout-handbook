@@ -12,7 +12,9 @@ window.LIB = {
     { id: 'nature', order: 10, title: 'Animals, insects, plants', blurb: 'Bites, stings, edible and toxic' },
     { id: 'weapons', order: 11, title: 'Weapons and ordnance safety', blurb: 'Safe handling, SA law, unexploded bombs' },
     { id: 'skills', order: 12, title: 'Practical skills', blurb: 'Fire, knots, weather, repairs, signals' },
-    { id: 'group', order: 13, title: 'Group, navigation, comms, mind', blurb: 'Roles, maps, radio, stress, law' }
+    { id: 'group', order: 13, title: 'Group, navigation, comms, mind', blurb: 'Roles, maps, radio, stress, law' },
+    { id: 'nuclear', order: 14, title: 'Nuclear and radiation', blurb: 'Fallout, shelter, decontamination, iodine' },
+    { id: 'outbreak', order: 15, title: 'Outbreaks and rabies', blurb: 'Zombie-like outbreaks, real diseases, bites' }
   ],
   items: [],
   add(cat, list) { list.forEach(e => { e.cat = cat; this.items.push(e); }); }
