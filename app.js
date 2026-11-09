@@ -367,11 +367,11 @@ function plainGuide(body, max) {
   if (t.length <= max) return t;
   const cut = t.lastIndexOf('\n', max); return t.slice(0, cut > max * .5 ? cut : max);
 }
-function buildPrompt(q, hits, ctx = '') {
+function buildPrompt(q, hits, ctx = '', scale = 1) {
   // Shorter guide text means less for the phone to read before it can start answering.
-  const guides = hits.map(i => `### ${i.title}\n${plainGuide(i.body, hits.length > 1 ? 1000 : 1500)}`).join('\n\n');
+  const guides = hits.map(i => `### ${i.title}\n${plainGuide(i.body, Math.round((hits.length > 1 ? 1000 : 1500) * scale))}`).join('\n\n');
   const wantsStock = inv.length && /\b(have|got|stock|supplies|cook|eat|meal|ration|last|days?|enough)\b/i.test(q);
-  const stock = wantsStock ? '\n\nSUPPLIES:\n' + inv.slice(0, 40).map(i => `- ${i.name}: ${i.qty} ${i.unit || ''}`.trim()).join('\n') : '';
+  const stock = wantsStock ? '\n\nSUPPLIES:\n' + inv.slice(0, scale < 0.7 ? 12 : 40).map(i => `- ${i.name}: ${i.qty} ${i.unit || ''}`.trim()).join('\n') : '';
   return `GUIDES:\n${guides}${stock}\n\n${ctx}QUESTION: ${q}`;
 }
 
@@ -594,21 +594,39 @@ async function runAI(q, hits, mode, ctx, done, follow, photo, meta) {
       txt.textContent = tidy(splitScores(shown).body);
     });
     const pw = isPhoto && photo.length > 1 ? photo.length + ' PHOTOS (all of the same subject, from different angles)' : 'THE PHOTO';
-    const prompt = isPhoto ? (hits.length ? buildPrompt(q, hits, ctx).replace(/^GUIDES:/, 'POSSIBLY RELATED GUIDES (they may not apply to the photo):').replace(/QUESTION:/, 'QUESTION ABOUT ' + pw + ':') : `${ctx}QUESTION ABOUT ${pw}: ${q || PHOTO_Q}`)
-      : mode === 'grounded' ? buildPrompt(q, hits, ctx)
-      : mode === 'mixed' ? buildPrompt(q, hits, ctx).replace(/^GUIDES:/, 'POSSIBLY RELATED GUIDES (they may not answer the question):')
-      : `${ctx}QUESTION: ${q}`;
     const med = meta && meta.med;
-    const fullPrompt = med ? prompt.replace(/QUESTION(?: ABOUT[^:]*)?:/, m => 'SOUTH AFRICAN MEDICAL SOURCES (official guideline and medicine extracts):\n' + med.text + '\n\n' + m) : prompt;
+    const cutLines = (t, max) => { if (t.length <= max) return t; const c = t.lastIndexOf('\n', max); return t.slice(0, c > max * 0.5 ? c : max); };
+    const compose = (gs, cu, mm) => {
+      const bp = (qq, hh) => buildPrompt(qq, hh, cu, gs);
+      const pr = isPhoto ? (hits.length ? bp(q, hits).replace(/^GUIDES:/, 'POSSIBLY RELATED GUIDES (they may not apply to the photo):').replace(/QUESTION:/, 'QUESTION ABOUT ' + pw + ':') : `${cu}QUESTION ABOUT ${pw}: ${q || PHOTO_Q}`)
+        : mode === 'grounded' ? bp(q, hits)
+        : mode === 'mixed' ? bp(q, hits).replace(/^GUIDES:/, 'POSSIBLY RELATED GUIDES (they may not answer the question):')
+        : `${cu}QUESTION: ${q}`;
+      const mt = med ? cutLines(med.text, mm) : '';
+      return mt ? pr.replace(/QUESTION(?: ABOUT[^:]*)?:/, m => 'SOUTH AFRICAN MEDICAL SOURCES (official guideline and medicine extracts):\n' + mt + '\n\n' + m) : pr;
+    };
     const medRule = med ? ' MEDICAL SOURCES: the message contains official South African medicine and guideline extracts, and sometimes general encyclopedia extracts. Prefer the South African extracts. When you give a dose or a medical fact that is in them, quote it and name the source (for example "PHC guideline 4.7"); if you use an encyclopedia extract, say "from the encyclopedia (general, not South African)". If something the person needs is NOT in the extracts, do not hold back: give your best opinion, but begin that part with "My own opinion (not from the sources):" and say how sure you are.' : '';
     onScores = await scoresOn();
     const sInstr = scoreInstr(onScores, mode), sExtra = sInstr ? 40 : 0;
-    const r = await L.generate({ system: (await withExtra(isPhoto ? AI_SYSTEM_PHOTO : own ? AI_SYSTEM_OWN : AI_SYSTEM)) + sInstr + medRule, prompt: fullPrompt, maxTokens: (isPhoto ? 340 : own ? 260 : 240) + sExtra + (med ? 80 : 0), images: isPhoto ? photo : [] });
-    $('#aifoot').textContent = `${looped ? 'Stopped automatically because the AI began repeating itself. ' : (stopped || r.stopped ? 'Stopped. ' : '')}Load ${sec(ld.ms)} s${ld.reused ? ' (already loaded)' : ''}, first words after ${r.firstMs >= 0 ? sec(r.firstMs) : '?'} s, finished after ${sec(r.ms)} s (${ld.backend}, ${ld.threads} threads). ` + (own
+    const sysText = (await withExtra(isPhoto ? AI_SYSTEM_PHOTO : own ? AI_SYSTEM_OWN : AI_SYSTEM)) + sInstr + medRule, maxTok = (isPhoto ? 340 : own ? 260 : 240) + sExtra + (med ? 80 : 0);
+    // The AI can hold about 3,000 tokens (question and answer together). Trim background step by step until it fits: earlier chats first, then the extra medical text, then the guide text.
+    const CAP = isPhoto ? 6144 : 3072, limit = Math.max(2400, Math.round((CAP - maxTok - 150) * 3.3) - (isPhoto ? photo.length * 1000 : 0));
+    const steps = [[1, ctx, 4200], [1, '', 4200], [1, '', 2600], [0.6, '', 2600], [0.6, '', 1500], [0.35, '', 1500], [0.35, '', 800], [0.2, '', 500]];
+    let fullPrompt = '', trimmed = 0;
+    for (let k = 0; k < steps.length; k++) { fullPrompt = compose(...steps[k]); trimmed = k; if (sysText.length + fullPrompt.length <= limit) break; }
+    const genOnce = pr => L.generate({ system: sysText, prompt: pr, maxTokens: maxTok, images: isPhoto ? photo : [] });
+    let r;
+    try { r = await genOnce(fullPrompt); }
+    catch (e1) {
+      if (/too long|maximum number of tokens|exceeding/i.test(String(e1 && e1.message))) { phase = 'The question was long, so trying again with less background'; trimmed = 99; r = await genOnce(compose(0.2, '', 400)); }
+      else throw e1;
+    }
+    $('#aifoot').textContent = `${looped ? 'Stopped automatically because the AI began repeating itself. ' : (stopped || r.stopped ? 'Stopped. ' : '')}Load ${sec(ld.ms)} s${ld.reused ? ' (already loaded)' : ''}, first words after ${r.firstMs >= 0 ? sec(r.firstMs) : '?'} s, finished after ${sec(r.ms)} s (${ld.backend}, ${ld.threads} threads). ${trimmed ? 'Long question: some background text was left out so the AI could read it. ' : ''}` + (own
       ? 'Treat the AI\u2019s own ideas as suggestions, not facts, and prefer the safest option.'
       : 'AI answers can be wrong: check the guides below.');
   } catch (e) {
     $('#aifoot').textContent = (stopped ? 'Stopped. ' : 'The AI could not answer: ' + (e.message || e) + '. ') + 'The guides below still work.';
+    if (!stopped && out) out.insertAdjacentHTML('afterbegin', '<div class="warn"><b>The AI did not give an answer.</b> ' + esc(/too long|maximum number of tokens/i.test(String(e && e.message)) ? 'The question and its background were too long for it to read at once. Try asking it on its own, without ticked earlier chats.' : String(e && e.message || e)) + '</div>');
   } finally {
     clearInterval(tick);
     const th = $('#aithink'); if (th) th.hidden = true;
