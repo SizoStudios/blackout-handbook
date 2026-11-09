@@ -74,12 +74,15 @@ const SYN = {
   car: ['vehicle', 'battery'], battery: ['batteries', 'solar'], wire: ['wiring', 'mains'], plug: ['wiring', 'socket'], mushroom: ['fungi', 'plants'],
   toilet: ['sanitation', 'latrine'], loo: ['sanitation'], pain: ['paracetamol', 'ibuprofen'], tablets: ['medicines', 'dose'], dose: ['medicines'],
   baby: ['infant', 'formula'], pregnant: ['birth', 'pregnancy'], tooth: ['dental'], eye: ['eyes'], light: ['lighting', 'torch'], fridge: ['spoil'],
+  nuclear: ['fallout', 'radiation', 'radioactive'], atomic: ['fallout', 'radiation', 'nuclear'], radiation: ['fallout', 'radioactive', 'nuclear'], radioactive: ['fallout', 'radiation', 'nuclear'], fallout: ['radiation', 'radioactive', 'nuclear'], reactor: ['nuclear', 'radiation', 'koeberg'],
+  zombie: ['outbreak', 'infected', 'rabies'], zombies: ['outbreak', 'infected', 'rabies'], outbreak: ['infectious', 'disease', 'spread'], infected: ['outbreak', 'infectious', 'sick'], virus: ['outbreak', 'infectious', 'spread'], pandemic: ['outbreak', 'infectious'], epidemic: ['outbreak', 'infectious'], rabid: ['rabies'],
   lost: ['separated', 'navigation'], scared: ['stress', 'panic'], thief: ['security', 'de-escalating'], robbery: ['de-escalating'], zulu: ['phrases'], translate: ['phrases']
 };
 const toks = q => q.toLowerCase().split(/[^a-z0-9À-ɏ]+/).filter(Boolean);
 const STOP = new Set('a an the i me my we our you your is are am be do does did how what when where why which who can could should would will to of for and or in on at it its this that with from if as by about there any some get have has suggestion suggest advice please tell explain give make unknown thing things something need want know use using after before someone somebody without best way ways good okay'.split(' '));
 const search = q => searchScored(q).map(r => r.i);
 window.BH = { searchScored }; // used for testing
+const idfCache = new Map();
 function searchScored(q) {
   const all = toks(q);
   const ts = all.filter(t => !STOP.has(t));
@@ -95,13 +98,14 @@ function searchScored(q) {
   };
   // Guides matching every word come first; guides matching at least half the words follow.
   // Long questions only need a third of their key words to match; short ones need one.
+  const NDOC = LIB.items.length, idf = t => { if (!idfCache.has(t)) { let df = 0; for (const i of LIB.items) if (i._t.includes(t) || i._b.includes(t)) df++; idfCache.set(t, 0.4 + 1.2 * (1 - df / NDOC)); } return idfCache.get(t); };
   const need = ts.length <= 2 ? 1 : Math.max(1, Math.ceil(ts.length * 0.34)), res = [];
   for (const i of LIB.items) {
     let s = 0, n = 0;
     for (const t of ts) {
       let h = score(i, t);
       for (const alt of SYN[t] || []) h = Math.max(h, Math.round(score(i, alt) * .8));
-      if (h) { n++; s += h; }
+      if (h) { n++; s += h * idf(t); }
     }
     if (n >= need) res.push({ i, s, full: n === ts.length, n, t: ts.length });
   }
@@ -362,14 +366,34 @@ const AI_NO_HARM = /\b(make|build|construct|assemble|manufacture|improvise|homem
 const STRONG_MATCH = 15; // below this, a guide is only "possibly related"
 
 // Markdown-ish guide text to plain text, cut at a line boundary.
-function plainGuide(body, max) {
-  const t = String(body).replace(/\r/g, '').split('\n').map(l => l.trim().replace(/^## /, '').replace(/^[!>] /, '').replace(/\*\*/g, '').replace(/^\|/, '').replace(/\|$/, '').replace(/\s*\|\s*/g, ' | ')).filter(Boolean).join('\n');
-  if (t.length <= max) return t;
-  const cut = t.lastIndexOf('\n', max); return t.slice(0, cut > max * .5 ? cut : max);
+// Tidy a guide for the AI. When it is longer than the budget, keep the SECTIONS that best match the question (anywhere in the guide), in their original order,
+// instead of just the top of the text.
+function plainGuide(body, max, q) {
+  const clean = l => l.trim().replace(/^## /, '').replace(/^[!>] /, '').replace(/\*\*/g, '').replace(/^\|/, '').replace(/\|$/, '').replace(/\s*\|\s*/g, ' | ');
+  const lines = String(body).replace(/\r/g, '').split('\n');
+  const full = lines.map(clean).filter(Boolean).join('\n');
+  if (full.length <= max) return full;
+  const secs = []; let cur = null;
+  for (const l of lines) { if (!cur || /^## /.test(l.trim())) { cur = []; secs.push(cur); } const c = clean(l); if (c) cur.push(c); }
+  const keys = q ? toks(q).filter(t => !STOP.has(t)) : [];
+  const rank = secs.map((a, n) => {
+    const txt = a.join('\n'), low = txt.toLowerCase(); let sc = 0;
+    for (const t of keys) { let h = low.split(t).length - 1; for (const alt of SYN[t] || []) h = Math.max(h, low.split(alt).length - 1); sc += Math.min(h, 3) + (a[0] && a[0].toLowerCase().includes(t) ? 3 : 0); }
+    return { n, txt, sc };
+  }).filter(x => x.txt);
+  rank.sort((x, y) => y.sc - x.sc || x.n - y.n);
+  let left = max; const pick = [];
+  for (const x of rank) {
+    if (x.txt.length + 1 <= left) { pick.push(x); left -= x.txt.length + 1; }
+    else if (left > 300 && !pick.some(y => y.part)) { const ls = x.txt.split('\n'); let t = ''; for (const l of ls) { if (t.length + l.length + 1 > left) break; t += (t ? '\n' : '') + l; } if (t) { pick.push({ n: x.n, txt: t, part: 1 }); left = 0; } }
+    if (left < 120) break;
+  }
+  pick.sort((x, y) => x.n - y.n);
+  return pick.map(x => x.txt).join('\n') || full.slice(0, max);
 }
-function buildPrompt(q, hits, ctx = '', scale = 1) {
+function buildPrompt(q, hits, ctx = '', scale = 1, base = 0) {
   // Shorter guide text means less for the phone to read before it can start answering.
-  const guides = hits.map(i => `### ${i.title}\n${plainGuide(i.body, Math.round((hits.length > 1 ? 1000 : 1500) * scale))}`).join('\n\n');
+  const guides = hits.map(i => `### ${i.title}\n${plainGuide(i.body, Math.round((base || (hits.length > 1 ? 1000 : 1500)) * scale), q)}`).join('\n\n');
   const wantsStock = inv.length && /\b(have|got|stock|supplies|cook|eat|meal|ration|last|days?|enough)\b/i.test(q);
   const stock = wantsStock ? '\n\nSUPPLIES:\n' + inv.slice(0, scale < 0.7 ? 12 : 40).map(i => `- ${i.name}: ${i.qty} ${i.unit || ''}`.trim()).join('\n') : '';
   return `GUIDES:\n${guides}${stock}\n\n${ctx}QUESTION: ${q}`;
@@ -559,9 +583,9 @@ async function vAsk() {
     let sq = q, scored = q ? searchScored(q).slice(0, 5) : [];
     if (q && prev && (!scored.length || scored[0].s < STRONG_MATCH || q.split(/\s+/).length < 7)) { const s2 = searchScored(prev.q + ' ' + q).slice(0, 5); if (s2.length && (!scored.length || s2[0].s >= scored[0].s)) { scored = s2; sq = prev.q + ' ' + q; } }
     const hits = scored.map(r => r.i);
-    const forAI = scored.filter((r, k) => k === 0 || (k === 1 && r.s >= scored[0].s * 0.8)).map(r => r.i);   // grounded = a clearly matching guide; mixed = only loosely related; own = nothing relevant
+    const forAI = scored.filter((r, k) => k === 0 || (k < 4 && r.s >= scored[0].s * 0.5)).map(r => r.i);   // grounded = a clearly matching guide; mixed = only loosely related; own = nothing relevant
     const top = scored[0];
-    const mode = pic.length ? 'photo' : !forAI.length ? 'own' : (top.s >= STRONG_MATCH && top.n / top.t >= 0.6) ? 'grounded' : 'mixed';
+    const mode = pic.length ? 'photo' : !forAI.length ? 'own' : (top.s >= STRONG_MATCH * 2 || (top.s >= STRONG_MATCH && top.n / top.t >= 0.6)) ? 'grounded' : 'mixed';
     window.BH_LAST_MODE = mode;
     const canAI = hasModel();
     const med = canAI && window.BHMeds && sq ? await window.BHMeds.context(sq) : null;
@@ -592,7 +616,7 @@ async function vAsk() {
     const box = $('#askpanel'); if (!box || box.dataset.k !== 'set') return;
     if (!L) { box.innerHTML = `<div class="note"><b>On-device AI:</b> available in the Android app and the Windows app. On this device you get the guides, which are the more reliable source anyway.</div>`; return; }
     try { st = await L.status(); } catch (e) {}
-    const be = await kvGet('aiBackend', 'cpu'), th = await kvGet('aiThreads', 4), scOn = (await kvGet('aiScores', {})) || {}, cx = +(await kvGet('aiCtx', 3072)) || 3072;
+    const be = await kvGet('aiBackend', 'cpu'), th = await kvGet('aiThreads', 4), scOn = (await kvGet('aiScores', {})) || {}, cx = +(await kvGet('aiCtx', 6144)) || 6144;
     box.innerHTML = hasModel()
       ? `<div class="note"><b>AI pack installed</b> (${st.sizeMB} MB)${st.loaded ? ', loaded (' + esc(st.backend) + ')' : ''}. It loads when you ask and frees itself after 10 idle minutes. Untick <b>AI answers</b> under the box to save battery.</div>
          <label>How much the AI can read at once</label><select id="aictx">${CTX_OPTS.map(([n, name, d]) => `<option value="${n}"${n === cx ? ' selected' : ''}>${name} (${n.toLocaleString()} tokens, ${d.split('.')[0]})</option>`).join('')}</select>
@@ -708,7 +732,7 @@ async function runAI(out, q, hits, mode, ctx, done, photo, meta, rec) {
   setStage(phase + '…');
   $o('.aistop').onclick = async () => { stopped = true; try { await L.stop(); } catch (e) {} };
   try {
-    const CTX = Math.max(2048, Math.min(32768, +(await kvGet('aiCtx', 3072)) || 3072));
+    const CTX = Math.max(2048, Math.min(32768, +(await kvGet('aiCtx', 6144)) || 6144));
     const ld = await L.load({ backend: await kvGet('aiBackend', 'cpu'), threads: await kvGet('aiThreads', 4), vision: isPhoto, ctx: CTX });
     phase = isPhoto ? 'Looking at photo' : 'Reading'; setStage(phase + '…');
     tok = await L.addListener('token', ev => {
@@ -723,8 +747,9 @@ async function runAI(out, q, hits, mode, ctx, done, photo, meta, rec) {
     const cutLines = (t, max) => { if (t.length <= max) return t; const c = t.lastIndexOf('\n', max); return t.slice(0, c > max * 0.5 ? c : max); };
     // a question about brands is answered as a list, so the answer starts with what was asked for
     const qx = /\bbrands?\b/i.test(q) ? q + (meta && meta.prevQ && q.split(/\s+/).length < 9 ? ' (about: ' + meta.prevQ + ')' : '') + ' (Answer with a short list: each medicine and the well-known brands of it sold in South Africa. Then one line of advice.)' : q;
+    let gbase = 0;   // per-guide text budget; 0 = the small default
     const compose = (gs, cu, mm) => {
-      const bp = (qq, hh) => buildPrompt(qq, hh, cu, gs);
+      const bp = (qq, hh) => buildPrompt(qq, hh, cu, gs, gbase);
       const pr = isPhoto ? (hits.length ? bp(qx, hits).replace(/^GUIDES:/, 'POSSIBLY RELATED GUIDES (they may not apply to the photo):').replace(/QUESTION:/, 'QUESTION ABOUT ' + pw + ':') : `${cu}QUESTION ABOUT ${pw}: ${q || PHOTO_Q}`)
         : mode === 'grounded' ? bp(qx, hits)
         : mode === 'mixed' ? bp(qx, hits).replace(/^GUIDES:/, 'POSSIBLY RELATED GUIDES (they may not answer the question):')
@@ -739,6 +764,7 @@ async function runAI(out, q, hits, mode, ctx, done, photo, meta, rec) {
     // How much the AI can read at once is a setting (Ask > gear). Trim the background step by step until it fits: earlier conversation first, then the extra medical text, then the guide text.
     const CAP = isPhoto ? CTX + 3072 : CTX, limit = Math.max(2400, Math.round((CAP - maxTok - 150) * 3.3) - (isPhoto ? photo.length * 1000 : 0));
     const big = limit > 16000, mmax = big ? 9000 : 4200;
+    gbase = limit > 24000 ? 6000 : limit > 12000 ? 3600 : limit > 7000 ? 1800 : 0;
     const steps = [[1, ctx, mmax], [1, '', mmax], [1, '', 2600], [0.6, '', 2600], [0.6, '', 1500], [0.35, '', 1500], [0.35, '', 800], [0.2, '', 500]];
     let fullPrompt = '', trimmed = 0;
     for (let k = 0; k < steps.length; k++) { fullPrompt = compose(...steps[k]); trimmed = k; if (sysText.length + fullPrompt.length <= limit) break; }

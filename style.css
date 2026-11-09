@@ -273,7 +273,7 @@ table{font-size:.9rem}
 .taskpill .viz{margin:0 2px 0 10px}
 .trow .viz{margin:0 6px}
 .tbig .viz{margin:0 6px}
-@media (max-width:640px){.taskpill span:not(.viz){display:none}.taskpill .viz{margin:0}}
+@media (max-width:640px){.taskpill span:not(.viz){display:none}.taskpill .viz{margin:0}.taskpill{padding:3px 12px;justify-content:center;min-width:46px}}
 
 /* room under the chat: the typing box height plus a clear gap, so the newest text never sits behind it */
 :root{--cph:110px}

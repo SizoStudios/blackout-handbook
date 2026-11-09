@@ -2,7 +2,7 @@
 // (Nuclear War Survival Skills, Oak Ridge National Laboratory) and general public-health practice.
 // Iodine doses and timing are adapted from the WHO 2017 guideline (CC BY-NC-SA 3.0 IGO); shelter, 24-hour and decontamination advice agrees with FEMA's 2024 planning guidance.
 LIB.add('nuclear', [
-{ id: 'n-first-minutes', title: 'First minutes: flash, blast, fallout', tags: 'nuclear bomb flash blast fallout get in stay in tune in explosion mushroom cloud',
+{ id: 'n-first-minutes', title: 'First minutes: flash, blast, fallout', tags: 'nuclear bomb flash blast fallout get in stay in tune in explosion mushroom cloud nuclear attack war missile atomic strike warning',
   body: `## Get in, stay in, tune in
 If there is a nuclear explosion near you, the order is simple: **get inside, stay inside, listen for instructions.**
 ## If you see the flash
@@ -16,7 +16,7 @@ The blast is over in seconds. The danger that lasts is **fallout**: dust and ash
 - Take off outer clothing if you were outside (see the decontamination guide). Wash exposed skin.
 - Radio on (batteries or hand-crank), low volume. Phone networks jam fast, so use text messages, not calls.
 ! Do not run toward the explosion to help. Do not go outside "to check". The first hours are the most dangerous for fallout, and the dose falls fast if you wait.` },
-{ id: 'n-fallout-decay', title: 'Fallout: how it behaves and the 7-10 rule', tags: 'fallout decay 7-10 rule dose rate half time wait hours radiation weather rain',
+{ id: 'n-fallout-decay', title: 'Fallout: how it behaves and the 7-10 rule', tags: 'fallout decay 7-10 rule dose rate half time wait hours radiation weather rain nuclear attack',
   body: `## What fallout is
 When a bomb bursts near the ground, it sucks up soil and debris. The material becomes radioactive and falls back, heaviest pieces first and closest, the finest dust much later and far away. At any one place it is usually all down within a few hours. It looks like ordinary dust or grit.
 ## It fades fast: the 7-10 rule
@@ -29,7 +29,7 @@ That is why waiting even a few hours inside matters so much, and why the first d
 - Do the essential jobs in the **shortest time**, then return to shelter.
 - Dose depends on **time, distance and shielding**: less time outside, more distance, more material between you and the dust.
 ! Hot spots happen: rain or wind can concentrate fallout in one spot. If you have a working dosimeter or meter, trust it over guesses.` },
-{ id: 'n-shelter-shielding', title: 'Best shelter: how much stuff between you and the dust', tags: 'shelter shielding basement concrete earth soil brick halving thickness protection factor',
+{ id: 'n-shelter-shielding', title: 'Best shelter: how much stuff between you and the dust', tags: 'shelter shielding basement concrete earth soil brick halving thickness protection factor nuclear attack',
   body: `## The idea
 Fallout gamma rays are weakened by anything dense between you and the dust. The denser and thicker, the better. A **halving thickness** is the amount of a material that cuts the dose in half. Every extra halving cuts it in half again.
 - **Packed earth: about 9 cm** per halving.
@@ -48,7 +48,7 @@ Fallout gamma rays are weakened by anything dense between you and the dust. The 
 - Keep the space small: a smaller room needs less material to enclose.
 - Make sure air can still get in (see the living-in-shelter guide).
 ! Do not fortify beyond what the floor and beams can carry. A collapse is a bigger killer than most doses.` },
-{ id: 'n-living-in-shelter', title: 'Living in a fallout shelter', tags: 'shelter days water toilet sanitation air ventilation heat food sleep children stress leave',
+{ id: 'n-living-in-shelter', title: 'Living in a fallout shelter', tags: 'shelter days water toilet sanitation air ventilation heat food sleep children stress leave nuclear attack',
   body: `## Before you settle
 - Put stored water and food inside. Anything open to the air outside can pick up dust.
 - Decide a toilet spot: a lidded bucket with a bin liner, in a corner, with a curtain for privacy. Cover with soil, ash or bleach-free litter after use. Empty only when the dose outside has fallen.
@@ -64,7 +64,7 @@ A packed shelter gets hot and stuffy. Without fresh air it is unsafe, so you mus
 - Stay **at least 24 hours**; many authorities advise up to 48 or longer. Follow instructions on the radio.
 - If you must leave sooner for water or medical care, go for the **shortest time**, cover skin, cover nose and mouth with a damp cloth or mask, and decontaminate when you return.
 ! Do not leave to look for family during the first day. A telephone call or message is better than a journey.` },
-{ id: 'n-decontamination', title: 'Decontamination: getting the dust off', tags: 'decontaminate clothes shower wash skin hair contamination dust remove',
+{ id: 'n-decontamination', title: 'Decontamination: getting the dust off', tags: 'decontaminate clothes shower wash skin hair contamination dust remove nuclear attack contaminated clothes',
   body: `## Why it matters
 Fallout dust on skin, hair and clothes keeps irradiating you and can be swallowed or breathed. Removing it is simple and very effective. The particles are about the size of salt or sand grains.
 Do it **without delay**, but keep following the shelter advice.
@@ -100,7 +100,7 @@ Fallout is mostly **dust on surfaces**. Food and water that were **sealed or cov
 - Do not eat or drink anything that has been left uncovered outside while the fallout was falling.
 - Do not stop eating and drinking: dehydration and hunger kill far sooner than low doses.
 ! Boiling does not remove radioactive material from water. It only kills germs. Use settling, filtering and covered sources.` },
-{ id: 'n-radiation-sickness', title: 'Radiation sickness: signs and what helps', tags: 'acute radiation syndrome ARS vomiting nausea dose burns hair loss blood count symptoms care',
+{ id: 'n-radiation-sickness', title: 'Radiation sickness: signs and what helps', tags: 'acute radiation syndrome ARS vomiting nausea dose burns hair loss blood count symptoms care nuclear attack radiation treatment',
   body: `## What it is
 A high dose of radiation over a short time damages the body's fast-growing cells: gut, blood-making marrow, skin. Low doses spread over time cause no immediate illness.
 ## Early signs (hours)
@@ -118,7 +118,7 @@ After the first illness, many people feel **better for days to weeks**. This is 
 ## Dose over time
 The body repairs itself, so a dose spread over days or weeks is far less harmful than the same dose received at once. The dangerous exposures are large doses in a short time (hours to a day).
 ! Radiation sickness is **not contagious**. Do not isolate or abandon someone because of it.` },
-{ id: 'n-iodine', title: 'Radioactive iodine and thyroid blockers', tags: 'iodine potassium iodide thyroid tablets KI reactor accident children pregnant milk',
+{ id: 'n-iodine', title: 'Radioactive iodine and thyroid blockers', tags: 'iodine potassium iodide thyroid tablets KI reactor accident children pregnant milk nuclear attack thyroid',
   body: `## What it protects against
 A reactor accident or a bomb releases **radioactive iodine**. It is breathed or eaten (especially in milk and leafy vegetables) and collects in the **thyroid gland** in the neck, where it can cause thyroid cancer later. Children, teenagers, babies and pregnant women are the most at risk.
 ## Single dose by age (WHO), when you are told to take it
