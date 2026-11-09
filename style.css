@@ -109,25 +109,8 @@ body.mapmode{padding-bottom:calc(56px + env(safe-area-inset-bottom))}
 /* ---- 3.10: background tasks, orb, blips, conversation layout ---- */
 :root{--navh:54px}
 #tabs a{position:relative}
-#tabs a.blip::after{content:"";position:absolute;top:7px;left:calc(50% + 16px);width:10px;height:10px;border-radius:50%;background:var(--bad);animation:blip 1.4s ease-out infinite}
-@keyframes blip{0%{box-shadow:0 0 0 0 rgba(255,107,94,.75)}100%{box-shadow:0 0 0 12px rgba(255,107,94,0)}}
-.orb{--s:96px;position:relative;width:var(--s);height:var(--s);flex:0 0 var(--s);display:grid;place-items:center;border-radius:50%;isolation:isolate}
-.orb.mini{--s:30px}
-.orb i{position:absolute;inset:7%;border-radius:50%;mix-blend-mode:normal;opacity:.82;filter:blur(calc(var(--s)*.06));will-change:border-radius,transform}
-.orb .o1{background:radial-gradient(circle at 30% 30%,#ffd166,#f0b429 55%,transparent 74%);animation:blob1 6.5s ease-in-out infinite}
-.orb .o2{background:radial-gradient(circle at 70% 35%,#ff9a8a,#ff6b5e 52%,transparent 72%);animation:blob2 7.5s ease-in-out infinite}
-.orb .o3{background:radial-gradient(circle at 45% 78%,#8fb6ff,#a98bff 55%,transparent 74%);animation:blob3 8.5s ease-in-out infinite}
-.orb b{position:relative;z-index:2;font-size:calc(var(--s)*.22);font-weight:800;color:#fff;text-shadow:0 1px 8px rgba(0,0,0,.7)}
-.orb.mini b{font-size:0}
-.orb::after{content:"";position:absolute;inset:-3px;border-radius:50%;background:conic-gradient(var(--acc) calc(var(--p)*1%),rgba(150,160,170,.25) 0);-webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 3px),#000 calc(100% - 2px));mask:radial-gradient(farthest-side,transparent calc(100% - 3px),#000 calc(100% - 2px))}
-.orb.ind::after{background:conic-gradient(from 0deg,transparent 0 62%,var(--acc) 100%);animation:orbspin 1.5s linear infinite}
-:root[data-theme=light] .orb i{mix-blend-mode:multiply}
-:root[data-theme=light] .orb b{color:#15181b;text-shadow:none}
-@keyframes blob1{0%,100%{border-radius:50% 50% 50% 50%;transform:translate(-8%,-6%) rotate(0) scale(1)}25%{border-radius:62% 38% 55% 45%/48% 60% 40% 52%;transform:translate(6%,-4%) rotate(90deg) scale(1.1)}50%{border-radius:40% 60% 45% 55%/60% 40% 60% 40%;transform:translate(8%,8%) rotate(180deg) scale(.95)}75%{border-radius:58% 42% 62% 38%/42% 58% 42% 58%;transform:translate(-6%,6%) rotate(270deg) scale(1.08)}}
-@keyframes blob2{0%,100%{border-radius:45% 55% 60% 40%/55% 45% 55% 45%;transform:translate(7%,5%) rotate(0) scale(1.05)}33%{border-radius:60% 40% 45% 55%/40% 60% 45% 55%;transform:translate(-7%,2%) rotate(-120deg) scale(.95)}66%{border-radius:38% 62% 55% 45%/58% 42% 58% 42%;transform:translate(2%,-8%) rotate(-240deg) scale(1.12)}}
-@keyframes blob3{0%,100%{border-radius:55% 45% 40% 60%/45% 55% 45% 55%;transform:translate(0,8%) rotate(0) scale(1)}30%{border-radius:42% 58% 60% 40%/60% 40% 55% 45%;transform:translate(-8%,-4%) rotate(140deg) scale(1.1)}65%{border-radius:60% 40% 48% 52%/42% 58% 42% 58%;transform:translate(7%,-6%) rotate(250deg) scale(.92)}}
-@keyframes orbspin{to{transform:rotate(360deg)}}
-@media (prefers-reduced-motion:reduce){.orb i,.orb.ind::after,#tabs a.blip::after{animation:none}}
+#tabs a.blip::after{content:"";position:absolute;top:10px;left:calc(50% + 20px);width:6px;height:6px;border-radius:50%;background:var(--bad);animation:blip 1.6s ease-out infinite}
+@keyframes blip{0%{box-shadow:0 0 0 0 rgba(255,107,94,.6)}100%{box-shadow:0 0 0 6px rgba(255,107,94,0)}}
 .taskpill{display:inline-flex;align-items:center;gap:6px;padding:3px 12px 3px 4px;border-radius:99px;min-height:40px;background:var(--bg2);border:1px solid var(--line);font-size:.8rem;max-width:44vw;white-space:nowrap}
 .taskpill span{overflow:hidden;text-overflow:ellipsis}
 .taskpill.paused{border-color:var(--bad)}
@@ -161,10 +144,10 @@ body.ask{padding-bottom:calc(var(--navh) + 160px + env(safe-area-inset-bottom))}
 .bub.ai .plain{white-space:pre-wrap}
 .aitext{white-space:pre-wrap;line-height:1.55;margin:6px 0}
 .aitag{font-size:.82rem;margin:0 0 8px;padding:6px 10px;border-radius:10px}
-.think{display:flex;gap:14px;align-items:center;padding:4px 2px}
-.think .orb{--s:64px}
+.think{display:flex;gap:14px;align-items:center;padding:6px 2px}
 .think .grow{min-width:0}
-.think .dim{margin:2px 0 4px}
+.think .grow b,.think .grow .dim{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.35}
+.think .dim{margin:2px 0 0}
 .gbox{margin-top:8px}
 .gd summary{cursor:pointer;color:var(--dim);font-size:.9rem;padding:6px 2px}
 .gd .card{margin:6px 0}
@@ -189,7 +172,29 @@ body.ask{padding-bottom:calc(var(--navh) + 160px + env(safe-area-inset-bottom))}
 
 [hidden]{display:none !important}
 
-.think .aistop.sq{flex:0 0 auto;margin-left:auto;align-self:flex-start;width:40px;min-width:40px;height:40px;min-height:40px;padding:0;border-radius:10px;font-size:1rem;justify-content:center;border-color:var(--bad);color:var(--bad)}
+.think .aistop.sq{flex:0 0 auto;margin-left:auto;align-self:center;width:40px;min-width:40px;height:40px;min-height:40px;padding:0;border-radius:10px;font-size:1rem;justify-content:center;border-color:var(--bad);color:var(--bad)}
 .shim{background:linear-gradient(90deg,var(--dim) 0%,var(--dim) 35%,var(--fg) 50%,var(--dim) 65%,var(--dim) 100%);background-size:250% 100%;-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent;animation:shim 2s linear infinite}
 @keyframes shim{0%{background-position:150% 0}100%{background-position:-50% 0}}
 @media (prefers-reduced-motion:reduce){.shim{animation:none;background:none;-webkit-text-fill-color:currentColor;color:var(--fg)}}
+
+/* three dots that hop over one another, all in step (no glow) */
+.dots{--g:20px;--d:11px;--j:15px;position:relative;display:inline-block;flex:0 0 auto;width:calc(var(--g)*2 + var(--d));height:calc(var(--d) + var(--j) + 4px);vertical-align:middle}
+.dots i{position:absolute;left:0;bottom:2px;width:var(--d);height:var(--d);border-radius:50%;animation:hop0 2.7s ease-in-out infinite}
+.dots i:nth-child(1){background:#f0b429;animation-name:hop0}
+.dots i:nth-child(2){background:#ff7a6b;animation-name:hop1}
+.dots i:nth-child(3){background:#a98bff;animation-name:hop2}
+.dots.mini{--g:10px;--d:6px;--j:8px}
+.dots.still i{animation-play-state:paused;opacity:.55}
+@keyframes hop0{0%{transform:translate(0,0)}16.67%{transform:translate(var(--g),calc(var(--j)*-1))}33.33%{transform:translate(calc(var(--g)*2),0)}50%{transform:translate(calc(var(--g)*1.5),2px)}66.67%{transform:translate(var(--g),0)}83.33%{transform:translate(calc(var(--g)*.5),2px)}100%{transform:translate(0,0)}}
+@keyframes hop1{0%{transform:translate(var(--g),0)}16.67%{transform:translate(calc(var(--g)*.5),2px)}33.33%{transform:translate(0,0)}50%{transform:translate(var(--g),calc(var(--j)*-1))}66.67%{transform:translate(calc(var(--g)*2),0)}83.33%{transform:translate(calc(var(--g)*1.5),2px)}100%{transform:translate(var(--g),0)}}
+@keyframes hop2{0%{transform:translate(calc(var(--g)*2),0)}16.67%{transform:translate(calc(var(--g)*1.5),2px)}33.33%{transform:translate(var(--g),0)}50%{transform:translate(calc(var(--g)*.5),2px)}66.67%{transform:translate(0,0)}83.33%{transform:translate(var(--g),calc(var(--j)*-1))}100%{transform:translate(calc(var(--g)*2),0)}}
+@media (prefers-reduced-motion:reduce){.dots i{animation:none}.dots i:nth-child(2){transform:translateX(var(--g))}.dots i:nth-child(3){transform:translateX(calc(var(--g)*2))}}
+.taskpill .dots{margin:0 2px 0 10px}
+.trow .dots{margin:0 4px}
+.tbig .dots{margin:0 6px}
+.bigpct{font-size:1.6rem;font-weight:800;min-width:3.2ch;text-align:right}
+@media (prefers-reduced-motion:reduce){#tabs a.blip::after{animation:none}}
+
+.think .aistage{font-size:.86rem}
+.think .aiwait{font-size:.74rem}
+@media (max-width:640px){.taskpill{padding:3px 12px;gap:0;max-width:none}.taskpill span:not(.dots){display:none}.taskpill .dots{margin:0}}

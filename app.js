@@ -417,7 +417,8 @@ async function paintChats() {
 const Tasks = (() => {
   const map = new Map(); let seq = 0, open = false; const subs = new Set();
   // The "orb": a soft colour blob that keeps changing shape while something is happening. pct = null means "working, no percentage".
-  const orb = (pct, mini) => `<div class="orb${mini ? ' mini' : ''}${pct == null ? ' ind' : ''}" style="--p:${pct == null ? 28 : pct}"><i class="o1"></i><i class="o2"></i><i class="o3"></i><b>${pct == null ? '' : pct + '%'}</b></div>`;
+  // Three dots that hop over one another, all in step. still = paused or finished.
+  const orb = (pct, mini, still) => `<span class="dots${mini ? ' mini' : ''}${still ? ' still' : ''}"><i></i><i></i><i></i></span>`;
   const stateText = t => t.state === 'done' ? 'Finished' : t.state === 'error' ? 'Problem: ' + (t.msg || '') : t.state === 'cancelled' ? 'Cancelled' : t.paused ? 'Paused' + (t.pct != null ? ' at ' + t.pct + '%' : '') : (t.pct == null ? (t.note || 'Working…') : t.pct + '%' + (t.note ? ' · ' + t.note : ''));
   const btns = t => t.state !== 'running' ? '' : `<span class="tbtn">${t.canPause ? `<button data-act="${t.paused ? 'resume' : 'pause'}" data-id="${t.id}">${t.paused ? 'Resume' : 'Pause'}</button>` : ''}${t.canCancel ? `<button class="dng" data-act="cancel" data-id="${t.id}">${t.kind === 'answer' ? 'Stop' : 'Cancel'}</button>` : ''}</span>`;
   const emit = () => { paintPill(); subs.forEach(f => { try { f(); } catch (e) {} }); };
@@ -425,9 +426,9 @@ const Tasks = (() => {
     const pill = $('#taskPill'), panel = $('#taskPanel'); if (!pill) return;
     const list = [...map.values()], live = list.filter(t => t.state === 'running');
     pill.hidden = !list.length;
-    if (list.length) { const t = live[0] || list[list.length - 1]; pill.innerHTML = orb(t.state === 'running' ? t.pct : (t.state === 'done' ? 100 : 0), true) + `<span>${live.length > 1 ? live.length + ' tasks' : esc(t.state === 'running' ? (t.short || t.label) : stateText(t))}</span>`; pill.classList.toggle('paused', !!(live[0] && live[0].paused)); }
+    if (list.length) { const t = live[0] || list[list.length - 1]; pill.innerHTML = orb(null, true, t.state !== 'running' || t.paused) + `<span>${live.length > 1 ? live.length + ' tasks' : esc(t.state === 'running' ? (t.short || t.label) + (t.pct != null ? ' ' + t.pct + '%' : '') : stateText(t))}</span>`; pill.classList.toggle('paused', !!(live[0] && live[0].paused)); }
     else { panel.hidden = true; open = false; }
-    if (open) panel.innerHTML = list.map(t => `<div class="trow">${orb(t.state === 'running' ? t.pct : (t.state === 'done' ? 100 : 0), true)}<div class="grow"><b>${esc(t.label)}</b><div class="dim">${esc(stateText(t))}</div>${t.state === 'running' && t.pct != null ? `<div class="pbar"><i style="width:${t.pct}%"></i></div>` : ''}</div>${btns(t)}</div>`).join('') || '<div class="dim" style="padding:8px">Nothing is running.</div>';
+    if (open) panel.innerHTML = list.map(t => `<div class="trow">${orb(null, true, t.state !== 'running' || t.paused)}<div class="grow"><b>${esc(t.label)}</b><div class="dim">${esc(stateText(t))}</div>${t.state === 'running' && t.pct != null ? `<div class="pbar"><i style="width:${t.pct}%"></i></div>` : ''}</div>${btns(t)}</div>`).join('') || '<div class="dim" style="padding:8px">Nothing is running.</div>';
   }
   function start(o) { const t = Object.assign({ id: ++seq, kind: 'task', label: '', short: '', pct: null, note: '', state: 'running', paused: false, cancelled: false, canPause: false, canCancel: true, tab: '', onCancel: null, msg: '' }, o); map.set(t.id, t); emit(); return t; }
   function update(t, patch) { Object.assign(t, patch); emit(); }
@@ -442,7 +443,7 @@ const Tasks = (() => {
   function mount(el, t) {
     const draw = () => {
       if (!el.isConnected) { subs.delete(draw); return; }
-      el.innerHTML = `<div class="tbig">${orb(t.state === 'running' ? t.pct : (t.state === 'done' ? 100 : 0), false)}<div class="grow"><b>${esc(t.label)}</b><div class="dim">${esc(stateText(t))}</div>${t.state === 'running' && t.pct != null ? `<div class="pbar"><i style="width:${t.pct}%"></i></div>` : ''}${btns(t)}</div></div>`;
+      el.innerHTML = `<div class="tbig">${orb(null, false, t.state !== 'running' || t.paused)}${t.state === 'running' && t.pct != null ? `<b class="bigpct">${t.pct}%</b>` : ''}<div class="grow"><b>${esc(t.label)}</b><div class="dim">${esc(stateText(t))}</div>${t.state === 'running' && t.pct != null ? `<div class="pbar"><i style="width:${t.pct}%"></i></div>` : ''}${btns(t)}</div></div>`;
       el.querySelectorAll('[data-act]').forEach(b => b.onclick = () => act(t, b.dataset.act));
     };
     subs.add(draw); draw(); return () => subs.delete(draw);
@@ -668,27 +669,27 @@ async function runAI(out, q, hits, mode, ctx, done, photo, meta, rec) {
   }
   const own = mode !== 'grounded', isPhoto = mode === 'photo' && !!photo && photo.length > 0;
   out.innerHTML = `<div class="${own ? 'warn' : 'note'} aitag">${AI_TAG[mode]}${meta && meta.med ? ' Medical extracts (South African guidelines and a general encyclopedia) were given to the AI; anything outside them is the AI’s own opinion and is labelled.' : ''}</div>
-    <div class="think">${Tasks.orb(null, false)}<div class="grow"><b class="aistage shim">Loading the AI…</b><div class="dim aiwait"></div></div><button class="aistop sq" aria-label="Stop" title="Stop">&#9632;</button></div>
+    <div class="think">${Tasks.orb(null, false)}<div class="grow"><b class="aistage shim">Loading…</b><div class="dim aiwait"></div></div><button class="aistop sq" aria-label="Stop" title="Stop">&#9632;</button></div>
     <div class="aitext" hidden></div><p class="dim aifoot"></p><div class="aiafter"></div>`;
   const $o = s => out.querySelector(s), txt = $o('.aitext'), wait = $o('.aiwait'), stage = $o('.aistage');
   const live = () => out.isConnected && ASK.thread && ASK.thread.isConnected;
   const keep = () => { if (live() && ASK.stick) window.scrollTo(0, document.documentElement.scrollHeight); };
   const setStage = s => { if (stage) stage.textContent = s; };
   let onScores = [];
-  let tok = null, stopped = false, got = false, phase = isPhoto ? 'Loading the AI and its picture reader' : 'Loading the AI', shown = '', looped = false;
+  let tok = null, stopped = false, got = false, phase = isPhoto ? 'Preparing' : 'Loading', shown = '', looped = false;
   const t0 = Date.now(), sec = ms => Math.round(ms / 1000), dur = ms => { const n = Math.round(ms / 1000); return n < 60 ? n + 's' : Math.floor(n / 60) + 'm ' + (n % 60) + 's'; };
   const task = Tasks.start({ kind: 'answer', label: 'Answering: ' + (q || PHOTO_Q).slice(0, 48), short: 'Answering…', tab: 'ask', canPause: false, canCancel: true, onCancel: () => { stopped = true; L.stop().catch(() => {}); } });
   // A visible clock, so a slow phone never looks frozen.
   const tick = setInterval(() => {
     const s = sec(Date.now() - t0);
-    if (wait) wait.textContent = got ? `${shown.trim() ? shown.trim().split(/\s+/).length : 0} words, ${dur(Date.now() - t0)}` : `${dur(Date.now() - t0)}. The first words can take a minute or more.`;
+    if (wait) wait.textContent = got ? `${shown.trim() ? shown.trim().split(/\s+/).length : 0} words · ${dur(Date.now() - t0)}` : `${dur(Date.now() - t0)} · this can take a while`;
   }, 1000);
   setStage(phase + '…');
   $o('.aistop').onclick = async () => { stopped = true; try { await L.stop(); } catch (e) {} };
   try {
     const CTX = Math.max(2048, Math.min(32768, +(await kvGet('aiCtx', 3072)) || 3072));
     const ld = await L.load({ backend: await kvGet('aiBackend', 'cpu'), threads: await kvGet('aiThreads', 4), vision: isPhoto, ctx: CTX });
-    phase = isPhoto ? 'Looking at your photo' : 'Reading the guides and your question'; setStage(phase + '…');
+    phase = isPhoto ? 'Looking at photo' : 'Reading'; setStage(phase + '…');
     tok = await L.addListener('token', ev => {
       if (looped) return;
       if (!got) { got = true; setStage('Writing…'); txt.hidden = false; }
@@ -724,7 +725,7 @@ async function runAI(out, q, hits, mode, ctx, done, photo, meta, rec) {
     let r;
     try { r = await genOnce(fullPrompt); }
     catch (e1) {
-      if (/too long|maximum number of tokens|exceeding/i.test(String(e1 && e1.message))) { setStage('The question was long, so trying again with less background…'); trimmed = 99; r = await genOnce(compose(0.2, '', 400)); }
+      if (/too long|maximum number of tokens|exceeding/i.test(String(e1 && e1.message))) { setStage('Trying a shorter one…'); trimmed = 99; r = await genOnce(compose(0.2, '', 400)); }
       else throw e1;
     }
     $o('.aifoot').textContent = `${looped ? 'Stopped automatically because the AI began repeating itself. ' : (stopped || r.stopped ? 'Stopped. ' : '')}Load ${dur(ld.ms)}${ld.reused ? ' (already loaded)' : ''}, first words after ${r.firstMs >= 0 ? dur(r.firstMs) : '?'}, finished after ${dur(r.ms)} (${ld.backend}, ${ld.threads} threads). ${trimmed ? 'Long question: some background text was left out so the AI could read it. ' : ''}` + (own
