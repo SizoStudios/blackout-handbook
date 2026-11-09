@@ -102,7 +102,7 @@
     <h3>How to store it</h3><p>${gone}</p>
     <div class="row"><button class="pri" id="askmed">Ask the AI about ${esc(m.name)}</button></div>
     <p class="dim">Sources: ${(m.levels || []).map(l => esc(l.name)).join('; ') || 'South African STG/EML'}; Consolidated Schedules (SAHPRA, August 2025)${m.enc ? '; Wikipedia' : ''}.</p>`;
-    $('#askmed').onclick = async () => { await kvSet('askPrefill', 'Tell me about ' + m.name + ': what it is for, how to use it, the dose for adults and children, and how to store it.'); location.hash = '#/ask'; };
+    $('#askmed').onclick = async () => { await window.BHAPP.kvSet('askPrefill', 'Tell me about ' + m.name + ': what it is for, how to use it, the dose for adults and children, and how to store it.'); location.hash = '#/ask'; };
   }
 
   function condList(view, d) {
@@ -129,7 +129,7 @@
     ${note('A reference, not a prescription. Copied as printed; layout may differ from the original.', 'warn')}
     <div class="msg" style="white-space:pre-wrap">${esc(c.text)}</div>
     <div class="row"><button class="pri" id="askcond">Ask the AI about this</button></div>`;
-    $('#askcond').onclick = async () => { await kvSet('askPrefill', 'Explain this in plain words: ' + c.title + '. What should I do?'); location.hash = '#/ask'; };
+    $('#askcond').onclick = async () => { await window.BHAPP.kvSet('askPrefill', 'Explain this in plain words: ' + c.title + '. What should I do?'); location.hash = '#/ask'; };
   }
   function about(view, d) {
     const rows = Object.values(d.src).map(s => `<div class="card"><b>${esc(s.name)}</b><br><span class="dim">${esc(s.by)}</span><br>${esc(s.terms)}</div>`).join('');

@@ -105,7 +105,7 @@
       ${a.s.map(([h, t]) => (h ? `<h3>${esc(h)}</h3>` : '') + `<div class="msg" style="white-space:pre-wrap;margin:6px 0">${esc(t)}</div>`).join('')}
       <div class="row"><button class="pri" id="askenc">Ask the AI about this</button></div>
       <p class="dim">Source: Wikipedia, “${esc(a.t)}” (${esc(a.u)}), October 2026, under the Creative Commons Attribution-ShareAlike licence. Shortened: only the useful sections are kept, with no references or pictures.</p>`;
-    $('#askenc').onclick = async () => { await kvSet('askPrefill', 'Explain ' + a.t + ' in plain words. What should I do about it?'); location.hash = '#/ask'; };
+    $('#askenc').onclick = async () => { await window.BHAPP.kvSet('askPrefill', 'Explain ' + a.t + ' in plain words. What should I do about it?'); location.hash = '#/ask'; };
   }
   window.BHEncy = { open, context, installed };
 })();
