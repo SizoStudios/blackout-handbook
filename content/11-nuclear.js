@@ -1,6 +1,6 @@
 // Nuclear and radiation guides: original wording. Facts checked against public-domain civil-defence material
 // (Nuclear War Survival Skills, Oak Ridge National Laboratory) and general public-health practice.
-// No iodine doses are given on purpose: dosing depends on age and must come from the health authority.
+// Iodine doses and timing are adapted from the WHO 2017 guideline (CC BY-NC-SA 3.0 IGO); shelter, 24-hour and decontamination advice agrees with FEMA's 2024 planning guidance.
 LIB.add('nuclear', [
 { id: 'n-first-minutes', title: 'First minutes: flash, blast, fallout', tags: 'nuclear bomb flash blast fallout get in stay in tune in explosion mushroom cloud',
   body: `## Get in, stay in, tune in
@@ -12,7 +12,7 @@ If there is a nuclear explosion near you, the order is simple: **get inside, sta
 ## Why you must go in
 The blast is over in seconds. The danger that lasts is **fallout**: dust and ash made radioactive, falling out of the sky over minutes to hours, sometimes hundreds of kilometres downwind. You cannot see or smell most of it. Indoors, with mass between you and the dust, you are far safer than outside.
 ## Then
-- Go to the middle of the building, or a basement, and stay there. **Plan to stay at least 24 hours** (longer if you can); the dose outside falls quickly in that time.
+- Go to the middle of the building, or a basement, and stay there. **Plan to stay at least 24 hours** (longer if you can) unless officials say otherwise or your building is threatened by fire or collapse. The dose outside falls quickly in that time.
 - Take off outer clothing if you were outside (see the decontamination guide). Wash exposed skin.
 - Radio on (batteries or hand-crank), low volume. Phone networks jam fast, so use text messages, not calls.
 ! Do not run toward the explosion to help. Do not go outside "to check". The first hours are the most dangerous for fallout, and the dose falls fast if you wait.` },
@@ -66,9 +66,10 @@ A packed shelter gets hot and stuffy. Without fresh air it is unsafe, so you mus
 ! Do not leave to look for family during the first day. A telephone call or message is better than a journey.` },
 { id: 'n-decontamination', title: 'Decontamination: getting the dust off', tags: 'decontaminate clothes shower wash skin hair contamination dust remove',
   body: `## Why it matters
-Fallout dust on skin, hair and clothes keeps irradiating you and can be swallowed or breathed. Removing it is simple and very effective.
+Fallout dust on skin, hair and clothes keeps irradiating you and can be swallowed or breathed. Removing it is simple and very effective. The particles are about the size of salt or sand grains.
+Do it **without delay**, but keep following the shelter advice.
 ## If you were outside
-1. **Take off outer clothing before you enter the shelter or at the door.** This alone removes most of the contamination. Roll it inside out, bag it, and put it well away from people (outside, downwind, covered if you can).
+1. **Take off outer clothing before you enter the shelter or at the door.** This alone removes most of the contamination. Dust collects in collars and around shoe tops and ankles, so check those. Roll clothes inside out, bag them, and put them well away from people (outside, downwind, covered if you can).
 2. **Wash.** If water is available: shower or wash with soap and lukewarm water, from head to toe. Use plain shampoo; **no conditioner** (it can hold dust on hair).
 3. Wash gently. Do not scrub hard or scratch the skin.
 4. Clean the face: blow your nose, wipe inside the nostrils, wipe your ears, rinse your eyes with clean water, clean under nails.
@@ -78,7 +79,7 @@ Brush off, then wipe skin with damp cloths or wet wipes from the top of the body
 ## Wounds
 Rinse wounds with clean water and cover them. Do this before anything else if the person is bleeding.
 ## Equipment
-Dust your shoes, bags and tools off outside, then wash them with water. Use gloves, a mask or cloth over the face, and wash hands afterward.
+Wipe, brush or rinse spectacles, wheelchairs and walking aids, bags, tools, pets and vehicles. Do it outside, wearing gloves and a mask or cloth over the face, and wash hands afterward.
 ## People
 A contaminated person is **not radioactive in a way that harms others** once their clothes are off. Do not shun them. Help them undress and wash.
 ! Do not use bleach or harsh chemicals on skin: they can burn and drive dust in. Do not eat, drink or smoke until hands and face are clean.` },
@@ -120,20 +121,27 @@ The body repairs itself, so a dose spread over days or weeks is far less harmful
 { id: 'n-iodine', title: 'Radioactive iodine and thyroid blockers', tags: 'iodine potassium iodide thyroid tablets KI reactor accident children pregnant milk',
   body: `## What it protects against
 A reactor accident or a bomb releases **radioactive iodine**. It is breathed or eaten (especially in milk and leafy vegetables) and collects in the **thyroid gland** in the neck, where it can cause thyroid cancer later. Children, teenagers, babies and pregnant women are the most at risk.
+## Single dose by age (WHO), when you are told to take it
+- **Newborn (birth to 1 month):** 12.5 mg iodine (16 mg KI), 1/8 of a 130 mg tablet
+- **Infant (1 month to 3 years):** 25 mg iodine (32 mg KI), 1/4 of a 130 mg tablet
+- **Child (3 to 12 years):** 50 mg iodine (65 mg KI), 1/2 of a 130 mg tablet
+- **Over 12 years and adults, including pregnant women:** 100 mg iodine (130 mg KI), 1 whole 130 mg tablet
 ## How the tablets work
 **Potassium iodide (KI)** tablets fill the thyroid with ordinary iodine so that the radioactive kind is not taken up. They protect **the thyroid only**, not the rest of the body, and **not against other radiation**.
 ## Using them safely
-- **Take them only when the authorities tell you to**, at the dose and age band on the pack or in the official message. The dose depends on age, so follow the instructions you are given.
-- They work best taken just before or within a few hours of exposure, and much less well a day or more afterward.
-- Protection lasts about a day, so more doses may be needed. Authorities say when.
-- Pregnant women and young children are top priority; newborns need special care, ask a clinician.
+- **Take them only when the authorities tell you to, or when a release of radioactive iodine is confirmed and you are in its path.** Follow the dose on the pack or in the official message first.
+- **Timing:** best from less than 24 hours before, up to 2 hours after, the start of exposure. Still reasonable up to 8 hours after. **Starting more than 24 hours after exposure can do more harm than good.**
+- **One dose is usually enough.** More doses only if exposure goes on beyond 24 hours (long release, unavoidable contaminated food or water, no way to leave) and the authorities say so. **Newborns, pregnant and breastfeeding women and people over 60 should not take repeat doses.**
+- **Who benefits most:** babies, children, teenagers, pregnant and breastfeeding women. Adults over 40 are less likely to benefit. If tablets are scarce, children and younger adults come first.
 - Some people should not take them (some thyroid diseases, iodine allergy). If you are unsure, ask a pharmacist or clinic.
+Tablets can be crushed into juice, jam or milk. Store them dry, cool and dark, in the box.
 ## What does not work
 - **Table salt, seaweed, iodised salt, tincture of iodine, Betadine, pool or water-purification iodine:** these are not safe or do not contain enough of the right form. Do not drink them.
 - Eating more iodine foods does not protect you in a useful way.
 ## Also do
 Shelter indoors, avoid fresh local milk and leafy vegetables in the first weeks if told to, use stored or packaged food.
-! Near a nuclear power station the authority may hand out tablets in advance. Keep them, in the box, and read the instructions. Do not give someone else's tablets.` },
+! Near a nuclear power station the authority may hand out tablets in advance. Keep them, in the box, and read the instructions. Do not give someone else's tablets.
+Source: adapted from the WHO guideline "Iodine thyroid blocking" (2017), CC BY-NC-SA 3.0 IGO. This is not a WHO publication and WHO does not endorse it.` },
 { id: 'n-power-plant', title: 'Nuclear power plant accident, including Koeberg', tags: 'reactor accident koeberg power station siren evacuate shelter cape town radiation release',
   body: `## What differs from a bomb
 There is **no blast and no big flash.** Radioactive gas and dust can be released and carried by the wind. The main dangers are radioactive iodine and other materials breathed or landing on the ground and food. People near the plant have the greatest risk; farther away, the main step is to stay informed.

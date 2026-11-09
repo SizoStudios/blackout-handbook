@@ -147,7 +147,8 @@ Wash the wound and get medical care (see the rabies and bite guides).
 - **Hygiene:** soap, toilet paper, sanitary products, nappies, bleach, rubbish bags, hand sanitiser (60%+ alcohol).
 - **Power and light:** torches, batteries, candles safely held, power banks, a radio.
 - **Cooking:** gas or a camp stove with fuel, matches, a pot.
-- **Paper:** a printed copy of this guide's key pages, phone numbers, documents.
+- **Paper:** a printed copy of this guide's key pages, phone numbers, copies of IDs, medicine list, proof of address and insurance papers.
+- **Odds and ends:** cash in small notes, a blanket and warm clothes for each person, a map, tape, a plastic sheet, scissors, a wrench and pliers, a whistle, spare keys, a written family plan with contacts, two-way radios if you have them. (Adapted from the CDC all-hazards kit list.)
 - **Mind:** books, cards, tasks, a quiet hour each day.
 ## Look after
 - Babies, the old, those with long-term illness: extra supplies and a plan.
