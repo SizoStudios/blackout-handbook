@@ -394,9 +394,8 @@ async function contextText() {
   return cs.length ? 'EARLIER CHATS (background only; they may be wrong):\n' + cs.map(c => `Q: ${c.q}\nA: ${c.a.replace(/\s+/g, ' ').slice(0, 450)}`).join('\n\n') + '\n\n' : '';
 }
 async function paintChats() {
+  const cs = await getChats(); const cn = $('#chatn'); if (cn) cn.textContent = cs.length ? `(${cs.length})` : '';
   const box = $('#chats'); if (!box) return;
-  const cs = await getChats();
-  $('#chatn').textContent = cs.length ? `(${cs.length})` : '';
   if (!cs.length) { box.innerHTML = '<p class="dim">Nothing saved yet. Each AI answer is saved on this device, so you can use it as background later.</p>'; return; }
   const sorted = cs.slice().sort((a, b) => (!!b.pin - !!a.pin) || b.u - a.u);
   box.innerHTML = `<p class="dim">Tick up to ${MAX_CTX} to give the AI as background for your next question. Each one adds to the time it spends reading. <span id="ctxn"></span></p>` +
@@ -414,29 +413,168 @@ async function paintChats() {
   box.querySelectorAll('.cview').forEach(b => b.onclick = async () => { const c = (await getChats()).find(x => x.id === b.dataset.id); if (!c) return; const m = $('#modal'); m.hidden = false; m.innerHTML = `<div><h2 style="margin-top:0">${esc(c.q)}</h2><p class="dim">${ago(c.u)}</p><div class="msg">${esc(c.a)}</div><div class="row"><button id="cclose">Close</button></div></div>`; $('#cclose').onclick = () => { m.hidden = true; }; });
 }
 
+/* ---------- background tasks: uploads and answers keep going when you leave the screen ---------- */
+const Tasks = (() => {
+  const map = new Map(); let seq = 0, open = false; const subs = new Set();
+  // The "orb": a soft colour blob that keeps changing shape while something is happening. pct = null means "working, no percentage".
+  const orb = (pct, mini) => `<div class="orb${mini ? ' mini' : ''}${pct == null ? ' ind' : ''}" style="--p:${pct == null ? 28 : pct}"><i class="o1"></i><i class="o2"></i><i class="o3"></i><b>${pct == null ? '' : pct + '%'}</b></div>`;
+  const stateText = t => t.state === 'done' ? 'Finished' : t.state === 'error' ? 'Problem: ' + (t.msg || '') : t.state === 'cancelled' ? 'Cancelled' : t.paused ? 'Paused' + (t.pct != null ? ' at ' + t.pct + '%' : '') : (t.pct == null ? (t.note || 'Working…') : t.pct + '%' + (t.note ? ' · ' + t.note : ''));
+  const btns = t => t.state !== 'running' ? '' : `<span class="tbtn">${t.canPause ? `<button data-act="${t.paused ? 'resume' : 'pause'}" data-id="${t.id}">${t.paused ? 'Resume' : 'Pause'}</button>` : ''}${t.canCancel ? `<button class="dng" data-act="cancel" data-id="${t.id}">${t.kind === 'answer' ? 'Stop' : 'Cancel'}</button>` : ''}</span>`;
+  const emit = () => { paintPill(); subs.forEach(f => { try { f(); } catch (e) {} }); };
+  function paintPill() {
+    const pill = $('#taskPill'), panel = $('#taskPanel'); if (!pill) return;
+    const list = [...map.values()], live = list.filter(t => t.state === 'running');
+    pill.hidden = !list.length;
+    if (list.length) { const t = live[0] || list[list.length - 1]; pill.innerHTML = orb(t.state === 'running' ? t.pct : (t.state === 'done' ? 100 : 0), true) + `<span>${live.length > 1 ? live.length + ' tasks' : esc(t.state === 'running' ? (t.short || t.label) : stateText(t))}</span>`; pill.classList.toggle('paused', !!(live[0] && live[0].paused)); }
+    else { panel.hidden = true; open = false; }
+    if (open) panel.innerHTML = list.map(t => `<div class="trow">${orb(t.state === 'running' ? t.pct : (t.state === 'done' ? 100 : 0), true)}<div class="grow"><b>${esc(t.label)}</b><div class="dim">${esc(stateText(t))}</div>${t.state === 'running' && t.pct != null ? `<div class="pbar"><i style="width:${t.pct}%"></i></div>` : ''}</div>${btns(t)}</div>`).join('') || '<div class="dim" style="padding:8px">Nothing is running.</div>';
+  }
+  function start(o) { const t = Object.assign({ id: ++seq, kind: 'task', label: '', short: '', pct: null, note: '', state: 'running', paused: false, cancelled: false, canPause: false, canCancel: true, tab: '', onCancel: null, msg: '' }, o); map.set(t.id, t); emit(); return t; }
+  function update(t, patch) { Object.assign(t, patch); emit(); }
+  function end(t, o = {}) {
+    t.state = o.error ? 'error' : o.cancelled ? 'cancelled' : 'done'; t.msg = o.msg || ''; t.paused = false; if (!o.error && !o.cancelled) t.pct = t.pct == null ? null : 100; emit();
+    setTimeout(() => { map.delete(t.id); emit(); }, o.error ? 7000 : 3000);
+    if (!o.cancelled && !o.error && (o.tab || t.tab)) blip(o.tab || t.tab);
+    if (o.toast && !o.cancelled) appToast(o.toast);
+  }
+  const act = (t, a) => { if (!t || t.state !== 'running') return; if (a === 'pause') t.paused = true; else if (a === 'resume') t.paused = false; else if (a === 'cancel') { t.cancelled = true; t.paused = false; if (t.onCancel) try { t.onCancel(); } catch (e) {} } emit(); };
+  // A large version inside a screen (for example while a map pack is being added).
+  function mount(el, t) {
+    const draw = () => {
+      if (!el.isConnected) { subs.delete(draw); return; }
+      el.innerHTML = `<div class="tbig">${orb(t.state === 'running' ? t.pct : (t.state === 'done' ? 100 : 0), false)}<div class="grow"><b>${esc(t.label)}</b><div class="dim">${esc(stateText(t))}</div>${t.state === 'running' && t.pct != null ? `<div class="pbar"><i style="width:${t.pct}%"></i></div>` : ''}${btns(t)}</div></div>`;
+      el.querySelectorAll('[data-act]').forEach(b => b.onclick = () => act(t, b.dataset.act));
+    };
+    subs.add(draw); draw(); return () => subs.delete(draw);
+  }
+  const blip = tab => { const cur = document.querySelector('#tabs a.on'); if (cur && cur.dataset.t === tab) return; const a = document.querySelector('#tabs a[data-t="' + tab + '"]'); if (a) a.classList.add('blip'); };
+  const clearBlip = tab => document.querySelectorAll('#tabs a.blip').forEach(a => { if (a.dataset.t === tab) a.classList.remove('blip'); });
+  function init() {
+    const pill = $('#taskPill'), panel = $('#taskPanel'); if (!pill) return;
+    pill.onclick = () => { open = !open; panel.hidden = !open; paintPill(); };
+    panel.onclick = e => { const b = e.target.closest('[data-act]'); if (b) act(map.get(+b.dataset.id), b.dataset.act); };
+  }
+  return { start, update, end, mount, act, orb, blip, clearBlip, init, get: id => map.get(id) };
+})();
+function appToast(msg) {
+  let t = $('#toast'); if (!t) { t = document.createElement('div'); t.id = 'toast'; t.onclick = () => t.classList.remove('show'); document.body.appendChild(t); }
+  t.textContent = msg; t.classList.add('show'); clearTimeout(appToast.t); appToast.t = setTimeout(() => t.classList.remove('show'), 4200);
+}
+window.BHTasks = Tasks; window.BHToast = appToast;
+
+/* ---------- Ask: a conversation, newest at the bottom, the box to type in stays at the bottom ---------- */
+const ASK = { turns: [], thread: null, photos: [], seq: 0, stick: true };
+window.addEventListener('scroll', () => { ASK.stick = (document.documentElement.scrollHeight - window.innerHeight - window.scrollY) < 260; }, { passive: true });
+const SMALLTALK = [
+  [/^(hi|hello|hey|hiya|howzit|heita|sawubona|molo|dumela|goeie\s?(more|middag|naand)|good\s(morning|afternoon|evening|day)|greetings|yo|sup)[\s!.,?]*$/i, ['Hi! What do you need help with?', 'Hello. Ask me anything: a guide, a medicine, a plant, or add a photo.']],
+  [/^(how are you|how's it going|how are things|how r u)[\s!.?]*$/i, ['I am ready to help. What is going on?']],
+  [/^(thanks|thank you|thx|ta|cheers|great|cool|ok|okay|alright|nice|good|perfect|got it|ok thanks|okay thanks)[\s!.,]*$/i, ['You are welcome. Ask me anything else when you need to.']],
+  [/^(bye|goodbye|see you|good night|goodnight)[\s!.]*$/i, ['Stay safe. I am here whenever you need me.']]
+];
+const smallTalk = q => { const m = SMALLTALK.find(([re]) => re.test(String(q).trim())); return m ? m[1][Math.floor(Math.random() * m[1].length)] : null; };
+const CTX_OPTS = [[3072, 'Standard', 'about 10,000 characters. Quickest, lightest on memory.'], [6144, 'Larger', 'about 20,000 characters.'], [12288, 'Large', 'about 40,000 characters. Slower to start answering and needs more memory.'], [16384, 'Very large', 'about 54,000 characters. Slowest, needs the most memory. If the app closes by itself, go back to a smaller one.']];
+
+function addTurn(q, pic) {
+  const th = ASK.thread; const w = th.querySelector('.welcome'); if (w) w.remove();
+  const rec = { id: ++ASK.seq, q, a: '', done: false };
+  const root = document.createElement('section'); root.className = 'turn';
+  root.innerHTML = `<div class="bub me">${pic.map(u => `<img src="${u}" class="tph" alt="">`).join('')}${pic.length ? '<br>' : ''}${esc(q || PHOTO_Q)}</div><div class="bub ai"><div class="aiout"></div><div class="gbox"></div></div>`;
+  th.appendChild(root); ASK.turns.push(rec); ASK.stick = true; if (th.isConnected) window.scrollTo(0, document.documentElement.scrollHeight);
+  return { rec, root, out: root.querySelector('.aiout'), gbox: root.querySelector('.gbox') };
+}
+// The last few finished turns of this conversation, so follow-ups such as "name some brands" make sense.
+const dialogCtx = () => { const d = ASK.turns.filter(t => t.done && t.a).slice(-3); return d.length ? 'CONVERSATION SO FAR:\n' + d.map(t => `Person: ${t.q}\nYou: ${t.a.replace(/\s+/g, ' ').slice(0, 420)}`).join('\n') + '\n\n' : ''; };
+
 async function vAsk() {
   setTab('ask'); await loadInv();
-  const L = LLM();
-  view.innerHTML = `<h1>Ask the library</h1>
-  <p class="dim">Type a question. The matching guides appear straight away${L ? ', and the AI starts answering (uses battery)' : ''}.</p>
-  <form id="askf" class="row"><input class="grow" id="askq" type="text" placeholder="e.g. how do I treat a burn?"><button class="pri" id="askgo">Ask</button><button type="button" id="askg" hidden>Guides only</button></form>
-  <div class="row" id="askph" hidden><span class="dim">Ask about photos (up to ${MAX_PHOTOS}):</span>${onPhone() ? '<button type="button" id="askcam">Take photo</button>' : ''}<button type="button" id="askpic">${onPhone() ? 'Choose photo' : 'Upload photos'}</button><input type="file" id="askfile" accept="image/*" multiple hidden></div>
-  <div id="askpv"></div>
-  <div id="ans" class="chat"></div>
-  <details id="chatbox" style="margin-top:12px"><summary class="dim">Saved chats <span id="chatn"></span></summary><div id="chats"></div></details>
-  <div id="aibox"></div>`;
-  let st = null;
-  if (L) { try { st = await L.status(); } catch (e) { st = null; } }
-  const hasModel = () => st && st.installed;
-  const paintBox = async () => {
-    const box = $('#aibox'); if (!box) return;
-    if (!L) { box.innerHTML = `<div class="note"><b>On-device AI:</b> available in the Android app. On this device you get the guides, which are the more reliable source anyway.</div>`; return; }
+  const L = LLM(); let st = null; if (L) { try { st = await L.status(); } catch (e) { st = null; } }
+  const hasModel = () => !!(st && st.installed);
+  document.body.classList.add('ask');
+  if (!ASK.thread) { ASK.thread = document.createElement('div'); ASK.thread.className = 'thread'; ASK.thread.id = 'thread'; }
+  view.innerHTML = `<div class="askbar"><h1>Ask</h1><span class="grow"></span><button id="anew">New chat</button><button id="ahist">History <span id="chatn"></span></button><button id="aset" class="ico" aria-label="AI settings">&#9881;</button></div><div id="askpanel" hidden></div><div id="thold"></div>`;
+  $('#thold').appendChild(ASK.thread);
+  const welcome = () => { ASK.thread.innerHTML = `<div class="welcome"><div class="wtitle">Ask me anything</div><p class="dim">Type below. Matching guides appear with every answer${hasModel() ? ', and the AI replies like a conversation: just keep asking' : ''}.</p><div class="wchips">${['How do I treat a burn?', 'How do I purify water?', 'What do I do after a snake bite?', 'Signs of dehydration'].map(t => `<button class="wchip">${esc(t)}</button>`).join('')}</div></div>`; ASK.thread.querySelectorAll('.wchip').forEach(b => b.onclick = () => { const i = $('#askq'); i.value = b.textContent; i.focus(); ASK.draft = i.value; }); };
+  if (!ASK.thread.children.length) welcome();
+
+  /* ---- the box at the bottom ---- */
+  const cp = $('#composer'); cp.hidden = false; const aiPref = await kvGet('askAI', true);
+  cp.innerHTML = `<div id="cpv"></div><div id="cmenu" hidden></div><input type="file" id="askfile" accept="image/*" multiple hidden>
+    <div class="cbox">${hasModel() ? '<button id="cplus" aria-label="Add photos">+</button>' : ''}<textarea id="askq" rows="1" placeholder="Ask anything…" enterkeyhint="send"></textarea><button id="csend" class="pri" aria-label="Send">&#10148;</button></div>
+    <div class="cmeta">${hasModel() ? `<label><input type="checkbox" id="cai"${aiPref ? ' checked' : ''}> AI answers</label>` : '<span class="dim">No AI installed: you get the matching guides. Open the gear to add it.</span>'}</div>`;
+  const qi = $('#askq'); const grow = () => { qi.style.height = 'auto'; qi.style.height = Math.min(qi.scrollHeight, 150) + 'px'; };
+  qi.value = ASK.draft || ''; grow();
+  { const pf = await kvGet('askPrefill', ''); if (pf) { qi.value = pf; ASK.draft = pf; kvSet('askPrefill', ''); grow(); } }
+  qi.oninput = () => { ASK.draft = qi.value; grow(); };
+  qi.onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey && matchMedia('(pointer:fine)').matches) { e.preventDefault(); send(); } };
+  if ($('#cai')) $('#cai').onchange = e => kvSet('askAI', e.target.checked);
+
+  /* photos */
+  const paintPv = () => {
+    $('#cpv').innerHTML = ASK.photos.length ? `<div class="pvrow">${ASK.photos.map((u, i) => `<span class="pvi"><img src="${u}" alt=""><button type="button" class="pvx" data-i="${i}" aria-label="Remove photo">&times;</button></span>`).join('')}<span class="dim">${ASK.photos.length} of ${MAX_PHOTOS}</span></div>` : '';
+    document.querySelectorAll('.pvx').forEach(b => b.onclick = () => { ASK.photos.splice(+b.dataset.i, 1); paintPv(); });
+  };
+  const addPhoto = async cam => { if (ASK.photos.length >= MAX_PHOTOS) { alert('Up to ' + MAX_PHOTOS + ' photos at a time.'); return; } const d = await getPhoto(cam); if (d) { ASK.photos.push(d); paintPv(); } };
+  const uploadPhotos = () => { const i = $('#askfile'); i.value = ''; i.onchange = async () => { const fs = [...i.files].slice(0, MAX_PHOTOS - ASK.photos.length); if (i.files.length > fs.length) alert('Up to ' + MAX_PHOTOS + ' photos at a time: the extra ones were left out.'); for (const f of fs) { const d = await shrink(f); if (d) ASK.photos.push(d); } paintPv(); }; i.click(); };
+  paintPv();
+  if ($('#cplus')) $('#cplus').onclick = () => {
+    const m = $('#cmenu'); if (!m.hidden) { m.hidden = true; return; }
+    m.innerHTML = `${onPhone() ? '<button data-m="cam">Take a photo</button>' : ''}<button data-m="pick">${onPhone() ? 'Choose from gallery' : 'Upload photos'}</button><div class="dim" style="padding:2px 6px">Photos are read by the AI, up to ${MAX_PHOTOS}.</div>`; m.hidden = false;
+    m.querySelectorAll('[data-m]').forEach(b => b.onclick = () => { m.hidden = true; if (b.dataset.m === 'cam') addPhoto(true); else if (onPhone()) addPhoto(false); else uploadPhotos(); });
+  };
+
+  /* ---- sending ---- */
+  const send = async () => {
+    const q = (qi.value || '').trim(), pic = ASK.photos.slice(); if (!q && !pic.length) return;
+    qi.value = ''; ASK.draft = ''; grow(); ASK.photos = []; paintPv(); $('#cmenu').hidden = true;
+    await runTurn(q, pic, hasModel() && ($('#cai') ? $('#cai').checked : true));
+  };
+  $('#csend').onclick = send;
+  const runTurn = async (q, pic, withAI) => {
+    const turn = addTurn(q, pic);
+    const chat = !pic.length && smallTalk(q);
+    if (chat) { turn.out.innerHTML = `<div class="plain">${esc(chat)}</div>`; turn.rec.a = chat; turn.rec.done = true; return; }
+    const prev = ASK.turns.slice(0, -1).filter(t => t.done).slice(-1)[0];
+    // a follow-up such as "name some brands" is searched together with the question before it when it does not match a guide on its own
+    let sq = q, scored = q ? searchScored(q).slice(0, 5) : [];
+    if (q && prev && (!scored.length || scored[0].s < STRONG_MATCH || q.split(/\s+/).length < 7)) { const s2 = searchScored(prev.q + ' ' + q).slice(0, 5); if (s2.length && (!scored.length || s2[0].s >= scored[0].s)) { scored = s2; sq = prev.q + ' ' + q; } }
+    const hits = scored.map(r => r.i);
+    const forAI = scored.filter((r, k) => k === 0 || (k === 1 && r.s >= scored[0].s * 0.8)).map(r => r.i);   // grounded = a clearly matching guide; mixed = only loosely related; own = nothing relevant
+    const top = scored[0];
+    const mode = pic.length ? 'photo' : !forAI.length ? 'own' : (top.s >= STRONG_MATCH && top.n / top.t >= 0.6) ? 'grounded' : 'mixed';
+    window.BH_LAST_MODE = mode;
+    const canAI = hasModel();
+    const med = canAI && window.BHMeds && sq ? await window.BHMeds.context(sq) : null;
+    const gpref = await kvGet('askGuides', null), gopen = gpref === null ? !canAI : !!gpref;
+    const support = !forAI.length ? 0 : mode === 'grounded' ? Math.round(70 + 30 * Math.min(1, (top.s - STRONG_MATCH) / 30)) : Math.round(10 + 40 * Math.min(1, top.s / STRONG_MATCH));
+    turn.gbox.innerHTML = hits.length ? `<details class="gd"${gopen ? ' open' : ''}><summary>Matching guides (${hits.length}) <span class="dim">tap to ${gopen ? 'hide' : 'show'}</span></summary>${hits.map(i => itemCard(i, `<div class="snip">${snippet(i, sq)}</div>`)).join('')}</details>` : (pic.length ? '' : '<div class="dim">No guide matched. Try different words.</div>');
+    const gd = turn.gbox.querySelector('details'); if (gd) gd.querySelector('summary').onclick = () => setTimeout(() => { kvSet('askGuides', gd.open); const h = gd.querySelector('summary .dim'); if (h) h.textContent = 'tap to ' + (gd.open ? 'hide' : 'show'); }, 0);
+    // one answer at a time: a question asked while the AI is busy waits its turn
+    const go = async () => {
+      const prevGate = ASK.gate || Promise.resolve(); let rel; ASK.gate = new Promise(r => { rel = r; });
+      turn.out.innerHTML = '<div class="dim">Waiting for the previous answer…</div>';
+      try { await prevGate; const bg = (await contextText()) + dialogCtx(); await runAI(turn.out, q, forAI, mode, bg, () => { paintChats(); }, pic, { support, med, prevQ: prev && prev.q }, turn.rec); }
+      finally { rel(); }
+    };
+    if (canAI && withAI) go();
+    else if (canAI) { turn.out.innerHTML = '<div class="row"><button class="pri aigo">Get an AI answer</button><span class="dim">Uses battery.</span></div>'; turn.out.querySelector('.aigo').onclick = go; turn.rec.done = true; }
+    else { turn.rec.done = true; }
+  };
+
+  /* ---- gear and history panels ---- */
+  const panel = $('#askpanel');
+  const showPanel = k => { if (!panel.hidden && panel.dataset.k === k) { panel.hidden = true; return; } panel.dataset.k = k; panel.hidden = false; if (k === 'hist') { panel.innerHTML = '<div id="chats"></div>'; paintChats(); } else paintSettings(); };
+  $('#aset').onclick = () => showPanel('set'); $('#ahist').onclick = () => showPanel('hist');
+  $('#anew').onclick = () => { if (ASK.turns.length && !confirm('Start a new conversation? This one stays in History.')) return; ASK.turns = []; ASK.photos = []; welcome(); paintPv(); window.scrollTo(0, 0); };
+  paintChats();
+  async function paintSettings() {
+    const box = $('#askpanel'); if (!box || box.dataset.k !== 'set') return;
+    if (!L) { box.innerHTML = `<div class="note"><b>On-device AI:</b> available in the Android app and the Windows app. On this device you get the guides, which are the more reliable source anyway.</div>`; return; }
     try { st = await L.status(); } catch (e) {}
-    $('#askg').hidden = !hasModel(); $('#askph').hidden = !hasModel();
-    const be = await kvGet('aiBackend', 'cpu'), th = await kvGet('aiThreads', 4), scOn = (await kvGet('aiScores', {})) || {};
+    const be = await kvGet('aiBackend', 'cpu'), th = await kvGet('aiThreads', 4), scOn = (await kvGet('aiScores', {})) || {}, cx = +(await kvGet('aiCtx', 3072)) || 3072;
     box.innerHTML = hasModel()
-      ? `<div class="note"><b>AI pack installed</b> (${st.sizeMB} MB)${st.loaded ? ', loaded (' + esc(st.backend) + ')' : ''}. It loads when you ask and frees itself after 10 idle minutes. Use <b>Guides only</b> to save battery.</div>
-         <details><summary class="dim">AI settings</summary>
+      ? `<div class="note"><b>AI pack installed</b> (${st.sizeMB} MB)${st.loaded ? ', loaded (' + esc(st.backend) + ')' : ''}. It loads when you ask and frees itself after 10 idle minutes. Untick <b>AI answers</b> under the box to save battery.</div>
+         <label>How much the AI can read at once</label><select id="aictx">${CTX_OPTS.map(([n, name, d]) => `<option value="${n}"${n === cx ? ' selected' : ''}>${name} (${n.toLocaleString()} tokens, ${d.split('.')[0]})</option>`).join('')}</select>
+         <p class="dim" id="aictxd">${esc((CTX_OPTS.find(o => o[0] === cx) || CTX_OPTS[0])[2])} It sets how long a question, its background and the conversation so far can be. Bigger values let the AI hold more of the conversation, but the first words take longer and it uses more memory.</p>
          <label>Speed mode</label><select id="aibe"><option value="cpu"${be === 'cpu' ? ' selected' : ''}>Standard (CPU): safest</option>${isNative() ? `<option value="gpu"${be === 'gpu' ? ' selected' : ''}>GPU: faster and gentler on battery, if your phone supports it</option>` : ''}</select>
          <label>CPU threads (try 4 first; changing it reloads the model)</label><select id="aith">${[2, 3, 4, 5, 6, 8].map(n => `<option value="${n}"${n === th ? ' selected' : ''}>${n}${n === 4 ? ' (standard)' : ''}</option>`).join('')}</select>
          <label>My own instructions for the AI (optional; used for every answer)</label><textarea id="aiextra" rows="4" placeholder="e.g. Put every numbered step on its own line. Keep answers under 100 words. Always give metric units.">${esc(await kvGet('aiExtra', ''))}</textarea>
@@ -444,69 +582,27 @@ async function vAsk() {
          <label>Reliability scores (off by default)</label>
          <p class="dim">A percentage can sound more certain than it is, so these are off until you switch them on. They are estimates, never a guarantee: use them as one clue next to your own judgement.</p>
          ${SCORES.map(x => `<label style="display:flex;gap:10px;color:var(--fg);align-items:flex-start;margin:6px 0"><input type="checkbox" class="sc" data-id="${x.id}"${scOn[x.id] ? ' checked' : ''} style="width:22px;height:22px;flex:0 0 auto"><span><b>${esc(x.name)}</b><br><span class="dim">${esc(x.info)} ${x.kind === 'app' ? 'Worked out by the app.' : 'Rated by the AI.'}</span></span></label>`).join('')}
-         <div class="row"><button id="aiunload">Free memory now</button><button class="dng" id="aidel">Delete the AI pack</button></div></details>`
-      : `<div class="note"><b>On-device AI: not installed.</b> ${window.BHLLM && !isNative() ? 'Choose the model file (<code>.litertlm</code>, about 3.7 GB) from the flash drive (Models folder). It is copied onto this computer once.' : 'Copy the model file (<code>.litertlm</code>, about 3.7 GB) to the phone, then choose it here.'} You need about ${Math.round((3700 + 300))} MB free${st ? ' (you have ' + st.freeMB + ' MB)' : ''}.</div>
-         <div class="row"><button class="pri" id="aiinst">Install AI pack</button></div><p class="dim" id="ip"></p>`;
+         <div class="row"><button id="aiunload">Free memory now</button><button class="dng" id="aidel">Delete the AI pack</button></div>`
+      : `<div class="note"><b>On-device AI: not installed.</b> ${window.BHLLM && !isNative() ? 'Choose the model file (<code>.litertlm</code>, about 3.7 GB) from the flash drive (Models folder). It is copied onto this computer once.' : 'Copy the model file (<code>.litertlm</code>, about 3.7 GB) to the phone, then choose it here.'} You need about ${Math.round(3700 + 300)} MB free${st ? ' (you have ' + st.freeMB + ' MB)' : ''}.</div>
+         <div class="row"><button class="pri" id="aiinst">Install AI pack</button></div><div id="ip"></div>`;
+    if ($('#aictx')) $('#aictx').onchange = e => { kvSet('aiCtx', +e.target.value); const o = CTX_OPTS.find(x => x[0] === +e.target.value); $('#aictxd').textContent = o[2] + ' Changing it reloads the AI the next time you ask.'; };
     if ($('#aibe')) $('#aibe').onchange = e => kvSet('aiBackend', e.target.value);
     if ($('#aith')) $('#aith').onchange = e => kvSet('aiThreads', +e.target.value);
     document.querySelectorAll('.sc').forEach(c => c.onchange = async () => { const o = Object.assign({}, (await kvGet('aiScores', {})) || {}); o[c.dataset.id] = c.checked; await kvSet('aiScores', o); });
     if ($('#aiextra')) $('#aiextra').onchange = e => kvSet('aiExtra', e.target.value.trim().slice(0, 1200));
-    if ($('#aiunload')) $('#aiunload').onclick = async () => { await L.unload(); paintBox(); };
-    if ($('#aidel')) $('#aidel').onclick = async () => { if (confirm('Delete the AI pack from this phone? You can install it again later.')) { await L.deleteModel(); paintBox(); } };
+    if ($('#aiunload')) $('#aiunload').onclick = async () => { await L.unload(); paintSettings(); };
+    if ($('#aidel')) $('#aidel').onclick = async () => { if (confirm('Delete the AI pack from this device? You can install it again later.')) { await L.deleteModel(); vAsk(); } };
     if ($('#aiinst')) $('#aiinst').onclick = async () => {
-      $('#aiinst').disabled = true; $('#ip').textContent = 'Choose the model file…';
-      const h = await L.addListener('installProgress', p => { $('#ip').textContent = `Copying… ${p.copiedMB} of ${p.totalMB} MB. Keep the app open.`; });
-      try { const r = await L.pickModel(); alert('AI pack installed (' + r.sizeMB + ' MB).'); }
-      catch (e) { if (!/cancel/i.test(e.message || '')) alert(e.message || 'Install failed.'); }
-      finally { h.remove(); paintBox(); }
+      $('#aiinst').disabled = true;
+      const t = Tasks.start({ kind: 'upload', label: 'Installing the AI pack', short: 'Installing AI', pct: 0, canPause: false, canCancel: false, tab: 'ask' });
+      const un = Tasks.mount($('#ip'), t);
+      const h = await L.addListener('installProgress', p => Tasks.update(t, { pct: Math.min(99, Math.round(100 * p.copiedMB / Math.max(1, p.totalMB))), note: `${p.copiedMB} of ${p.totalMB} MB. Keep the app open.` }));
+      try { const r = await L.pickModel(); Tasks.end(t, { tab: 'ask', toast: 'AI pack installed (' + r.sizeMB + ' MB)' }); }
+      catch (e) { if (/cancel/i.test(e.message || '')) Tasks.end(t, { cancelled: true }); else { Tasks.end(t, { error: true, msg: e.message || 'Install failed' }); alert(e.message || 'Install failed.'); } }
+      finally { h.remove(); vAsk(); }
     };
-  };
-  paintBox(); paintChats();
-  { const pf = await kvGet('askPrefill', ''); if (pf) { $('#askq').value = pf; kvSet('askPrefill', ''); } }
-
-  // One tap: guides appear, and (if the AI is installed) the AI starts answering at once.
-  const ask = async withAI => {
-    const q = $('#askq').value.trim(); if (!q && !photos.length) return;
-    const scored = q ? searchScored(q).slice(0, 5) : [], hits = scored.map(r => r.i);
-    // Guides the AI may use: the best one, plus the next only if nearly as relevant.
-    const forAI = scored.filter((r, k) => k === 0 || (k === 1 && r.s >= scored[0].s * 0.8)).map(r => r.i);
-    // grounded = a clearly matching guide; mixed = only loosely related guides; own = nothing relevant.
-    const top = scored[0];
-    const mode = photos.length ? 'photo' : !forAI.length ? 'own' : (top.s >= STRONG_MATCH && top.n / top.t >= 0.6) ? 'grounded' : 'mixed';
-    const pic = photos.slice();
-    window.BH_LAST_MODE = mode; // used for testing
-    const canAI = hasModel();
-    const med = canAI && window.BHMeds && q ? await window.BHMeds.context(q) : null;   // matching South African medicine cards and guideline extracts
-    const gpref = await kvGet('askGuides', null), gopen = gpref === null ? !canAI : !!gpref;
-    // how strongly the guides match (0 to 100), worked out here and shown only if the Handbook Support Score is switched on
-    const support = !forAI.length ? 0 : mode === 'grounded' ? Math.round(70 + 30 * Math.min(1, (top.s - STRONG_MATCH) / 30)) : Math.round(10 + 40 * Math.min(1, top.s / STRONG_MATCH));
-    $('#ans').innerHTML = `<div class="msg me">${pic.map(u => `<img src="${u}" style="max-width:31%;border-radius:8px;margin:0 6px 6px 0">`).join('')}${pic.length ? '<br>' : ''}${esc(q || PHOTO_Q)}</div>
-      ${canAI ? `<div id="aiout"></div>${withAI ? '' : '<div class="row"><button class="pri" id="aigo">Get an AI answer</button><span class="dim">Uses battery and warms the phone.</span></div>'}` : ''}
-      ${pic.length && !hits.length ? '' : hits.length ? `<details id="gdet"${gopen ? ' open' : ''}><summary class="msg" style="cursor:pointer">Most relevant guides (${hits.length}) <span class="dim">tap to ${gopen ? 'hide' : 'show'}</span></summary>${hits.map(i => itemCard(i, `<div class="snip">${snippet(i, q)}</div>`)).join('')}</details>` : '<div class="msg">Nothing matched. Try different words.</div>'}`;
-    // remember whether the guides were left open or closed (the first time: closed when the AI is answering, open when it is not)
-    if ($('#gdet')) $('#gdet').querySelector('summary').onclick = () => setTimeout(() => { const d = $('#gdet'); if (d) { kvSet('askGuides', d.open); const h = d.querySelector('summary .dim'); if (h) h.textContent = 'tap to ' + (d.open ? 'hide' : 'show'); } }, 0);
-    const go = async () => { const g = $('#aigo'); if (g) g.disabled = true; await runAI(q, forAI, mode, await contextText(), async () => { await paintBox(); await paintChats(); }, follow, pic, { support, med }); if (g) g.disabled = false; };
-    if ($('#aigo')) $('#aigo').onclick = go;
-    if (canAI && withAI) go();
-    if (pic.length) { photos = []; paintPhoto(); }
-  };
-  // Photo for the AI: taken with the camera or chosen from the gallery, shrunk first so it is quicker to read.
-  let photos = [];
-  const paintPhoto = () => {
-    $('#askpv').innerHTML = photos.length ? `<div class="card"><div style="display:flex;flex-wrap:wrap;gap:8px">${photos.map((u, i) => `<div style="position:relative"><img src="${u}" style="height:90px;border-radius:8px;display:block"><button type="button" class="askpx" data-i="${i}" style="position:absolute;top:2px;right:2px;padding:2px 8px;min-height:0">✕</button></div>`).join('')}</div>
-      <div class="row"><button type="button" id="askpall">Remove all</button><span class="dim">${photos.length} of ${MAX_PHOTOS} photos. Add more angles if one is not enough. Type a question, or just tap Ask.</span></div></div>` : '';
-    document.querySelectorAll('.askpx').forEach(b => b.onclick = () => { photos.splice(+b.dataset.i, 1); paintPhoto(); });
-    if ($('#askpall')) $('#askpall').onclick = () => { photos = []; paintPhoto(); };
-  };
-  const takePhoto = async cam => { if (photos.length >= MAX_PHOTOS) { alert('Up to ' + MAX_PHOTOS + ' photos at a time.'); return; } const d = await getPhoto(cam); if (d) { photos.push(d); paintPhoto(); $('#askq').placeholder = 'About these photos (optional)'; } };
-  // Computer: pick several image files at once.
-  const uploadPhotos = () => { const i = $('#askfile'); i.value = ''; i.onchange = async () => { const fs = [...i.files].slice(0, MAX_PHOTOS - photos.length); if (i.files.length > fs.length) alert('Up to ' + MAX_PHOTOS + ' photos at a time: the extra ones were left out.'); for (const f of fs) { const d = await shrink(f); if (d) photos.push(d); } paintPhoto(); $('#askq').placeholder = 'About these photos (optional)'; }; i.click(); };
-  if ($('#askcam')) $('#askcam').onclick = () => takePhoto(true);
-  $('#askpic').onclick = () => onPhone() ? takePhoto(false) : uploadPhotos();
-  // After an answer: "Ask a follow-up" ticks that chat as background and returns to the question box.
-  const follow = id => { if (!ctxIds.includes(id)) { ctxIds.push(id); while (ctxIds.length > MAX_CTX) ctxIds.shift(); } paintChats(); const i = $('#askq'); i.value = ''; i.placeholder = 'Your follow-up question…'; i.focus(); window.scrollTo(0, 0); };
-  $('#askf').onsubmit = e => { e.preventDefault(); ask(true); };
-  $('#askg').onclick = () => ask(false);
+  }
+  if (ASK.turns.length) setTimeout(() => window.scrollTo(0, document.documentElement.scrollHeight), 60);
 }
 
 // If the model starts repeating itself, find where the repeat begins and cut the text there.
@@ -561,89 +657,102 @@ function scoreBox(on, mode, vals) {
   });
   return rows.length ? `<div class="card" id="aiscores"><b>Reliability scores</b> <span class="dim">(estimates, not guarantees)</span>${rows.join('')}<p class="dim">A number can sound surer than it is. Use it as one clue beside your own judgement and the guides.</p></div>` : '';
 }
-async function runAI(q, hits, mode, ctx, done, follow, photo, meta) {
-  const L = LLM(), out = $('#aiout'); if (!L || !out) return;
+const BRAND_RULE = ' If the person asks for brand names or examples, START your answer with a short list: the medicine, then the well-known brands you are fairly sure of (for example South African brands such as Panado for paracetamol), labelled "from my own knowledge". Then add any short advice. Use the brands in the guides first.';
+const GREET_RULE = ' If the message is only a greeting, thanks or small talk, answer in one short friendly sentence and ask what they need. Do not give advice, lists or long text unless they ask for it.';
+async function runAI(out, q, hits, mode, ctx, done, photo, meta, rec) {
+  const L = LLM(); if (!L || !out) return;
   if (AI_NO_HARM.test(q)) {
     out.innerHTML = '<div class="msg">I will not help with making weapons or explosives. For protecting your group, see the Security and Weapons safety guides.</div>';
+    if (rec) rec.done = true;
     return;
   }
   const own = mode !== 'grounded', isPhoto = mode === 'photo' && !!photo && photo.length > 0;
-  out.innerHTML = `<div class="${own ? 'warn' : 'note'}" id="aitag">${AI_TAG[mode]}${meta && meta.med ? ' Medical extracts (South African guidelines and a general encyclopedia) were given to the AI; anything outside them is the AI\u2019s own opinion and is labelled.' : ''}</div>
-    <div class="think" id="aithink"><div class="steps"><span data-s="1" class="on">1 Loading</span><span data-s="2">2 Reading</span><span data-s="3">3 Writing</span></div><div class="bar"><i></i></div><p class="dim" id="aiwait"></p></div>
-    <div class="msg" id="aitext" hidden></div><div class="row"><button id="aistop">Stop</button></div><p class="dim" id="aifoot"></p><div id="aifollow"></div>`;
-  const txt = $('#aitext'), wait = $('#aiwait');
-  const setStep = n => out.querySelectorAll('.steps span').forEach(s => { s.className = +s.dataset.s < n ? 'done' : +s.dataset.s === n ? 'on' : ''; });
+  out.innerHTML = `<div class="${own ? 'warn' : 'note'} aitag">${AI_TAG[mode]}${meta && meta.med ? ' Medical extracts (South African guidelines and a general encyclopedia) were given to the AI; anything outside them is the AI’s own opinion and is labelled.' : ''}</div>
+    <div class="think">${Tasks.orb(null, false)}<div class="grow"><b class="aistage shim">Loading the AI…</b><div class="dim aiwait"></div></div><button class="aistop sq" aria-label="Stop" title="Stop">&#9632;</button></div>
+    <div class="aitext" hidden></div><p class="dim aifoot"></p><div class="aiafter"></div>`;
+  const $o = s => out.querySelector(s), txt = $o('.aitext'), wait = $o('.aiwait'), stage = $o('.aistage');
+  const live = () => out.isConnected && ASK.thread && ASK.thread.isConnected;
+  const keep = () => { if (live() && ASK.stick) window.scrollTo(0, document.documentElement.scrollHeight); };
+  const setStage = s => { if (stage) stage.textContent = s; };
   let onScores = [];
   let tok = null, stopped = false, got = false, phase = isPhoto ? 'Loading the AI and its picture reader' : 'Loading the AI', shown = '', looped = false;
-  const t0 = Date.now(), sec = ms => Math.round(ms / 1000);
-  // A visible clock and step display, so a slow phone never looks frozen.
+  const t0 = Date.now(), sec = ms => Math.round(ms / 1000), dur = ms => { const n = Math.round(ms / 1000); return n < 60 ? n + 's' : Math.floor(n / 60) + 'm ' + (n % 60) + 's'; };
+  const task = Tasks.start({ kind: 'answer', label: 'Answering: ' + (q || PHOTO_Q).slice(0, 48), short: 'Answering…', tab: 'ask', canPause: false, canCancel: true, onCancel: () => { stopped = true; L.stop().catch(() => {}); } });
+  // A visible clock, so a slow phone never looks frozen.
   const tick = setInterval(() => {
     const s = sec(Date.now() - t0);
-    wait.textContent = got ? `Writing… ${shown.trim() ? shown.trim().split(/\s+/).length : 0} words, ${s} s` : `${phase}… ${s} s. The first words can take a minute or more on this phone. Tap Stop to cancel.`;
+    if (wait) wait.textContent = got ? `${shown.trim() ? shown.trim().split(/\s+/).length : 0} words, ${dur(Date.now() - t0)}` : `${dur(Date.now() - t0)}. The first words can take a minute or more.`;
   }, 1000);
-  wait.textContent = phase + '…';
-  $('#aistop').onclick = async () => { stopped = true; try { await L.stop(); } catch (e) {} };
+  setStage(phase + '…');
+  $o('.aistop').onclick = async () => { stopped = true; try { await L.stop(); } catch (e) {} };
   try {
-    const ld = await L.load({ backend: await kvGet('aiBackend', 'cpu'), threads: await kvGet('aiThreads', 4), vision: isPhoto });
-    phase = isPhoto ? 'Looking at your photo' : 'Reading the guides and your question'; setStep(2);
+    const CTX = Math.max(2048, Math.min(32768, +(await kvGet('aiCtx', 3072)) || 3072));
+    const ld = await L.load({ backend: await kvGet('aiBackend', 'cpu'), threads: await kvGet('aiThreads', 4), vision: isPhoto, ctx: CTX });
+    phase = isPhoto ? 'Looking at your photo' : 'Reading the guides and your question'; setStage(phase + '…');
     tok = await L.addListener('token', ev => {
       if (looped) return;
-      if (!got) { got = true; setStep(3); txt.hidden = false; }
+      if (!got) { got = true; setStage('Writing…'); txt.hidden = false; }
       shown += ev.text; const cut = trimRepeat(shown);
       if (cut !== null) { looped = true; shown = cut; txt.textContent = tidy(splitScores(shown).body); stopped = true; L.stop().catch(() => {}); return; }
-      txt.textContent = tidy(splitScores(shown).body);
+      txt.textContent = tidy(splitScores(shown).body); keep();
     });
     const pw = isPhoto && photo.length > 1 ? photo.length + ' PHOTOS (all of the same subject, from different angles)' : 'THE PHOTO';
     const med = meta && meta.med;
     const cutLines = (t, max) => { if (t.length <= max) return t; const c = t.lastIndexOf('\n', max); return t.slice(0, c > max * 0.5 ? c : max); };
+    // a question about brands is answered as a list, so the answer starts with what was asked for
+    const qx = /\bbrands?\b/i.test(q) ? q + (meta && meta.prevQ && q.split(/\s+/).length < 9 ? ' (about: ' + meta.prevQ + ')' : '') + ' (Answer with a short list: each medicine and the well-known brands of it sold in South Africa. Then one line of advice.)' : q;
     const compose = (gs, cu, mm) => {
       const bp = (qq, hh) => buildPrompt(qq, hh, cu, gs);
-      const pr = isPhoto ? (hits.length ? bp(q, hits).replace(/^GUIDES:/, 'POSSIBLY RELATED GUIDES (they may not apply to the photo):').replace(/QUESTION:/, 'QUESTION ABOUT ' + pw + ':') : `${cu}QUESTION ABOUT ${pw}: ${q || PHOTO_Q}`)
-        : mode === 'grounded' ? bp(q, hits)
-        : mode === 'mixed' ? bp(q, hits).replace(/^GUIDES:/, 'POSSIBLY RELATED GUIDES (they may not answer the question):')
-        : `${cu}QUESTION: ${q}`;
+      const pr = isPhoto ? (hits.length ? bp(qx, hits).replace(/^GUIDES:/, 'POSSIBLY RELATED GUIDES (they may not apply to the photo):').replace(/QUESTION:/, 'QUESTION ABOUT ' + pw + ':') : `${cu}QUESTION ABOUT ${pw}: ${q || PHOTO_Q}`)
+        : mode === 'grounded' ? bp(qx, hits)
+        : mode === 'mixed' ? bp(qx, hits).replace(/^GUIDES:/, 'POSSIBLY RELATED GUIDES (they may not answer the question):')
+        : `${cu}QUESTION: ${qx}`;
       const mt = med ? cutLines(med.text, mm) : '';
       return mt ? pr.replace(/QUESTION(?: ABOUT[^:]*)?:/, m => 'SOUTH AFRICAN MEDICAL SOURCES (official guideline and medicine extracts):\n' + mt + '\n\n' + m) : pr;
     };
     const medRule = med ? ' MEDICAL SOURCES: the message contains official South African medicine and guideline extracts, and sometimes general encyclopedia extracts. Prefer the South African extracts. When you give a dose or a medical fact that is in them, quote it and name the source (for example "PHC guideline 4.7"); if you use an encyclopedia extract, say "from the encyclopedia (general, not South African)". If something the person needs is NOT in the extracts, do not hold back: give your best opinion, but begin that part with "My own opinion (not from the sources):" and say how sure you are.' : '';
     onScores = await scoresOn();
     const sInstr = scoreInstr(onScores, mode), sExtra = sInstr ? 40 : 0;
-    const sysText = (await withExtra(isPhoto ? AI_SYSTEM_PHOTO : own ? AI_SYSTEM_OWN : AI_SYSTEM)) + sInstr + medRule, maxTok = (isPhoto ? 340 : own ? 260 : 240) + sExtra + (med ? 80 : 0);
-    // The AI can hold about 3,000 tokens (question and answer together). Trim background step by step until it fits: earlier chats first, then the extra medical text, then the guide text.
-    const CAP = isPhoto ? 6144 : 3072, limit = Math.max(2400, Math.round((CAP - maxTok - 150) * 3.3) - (isPhoto ? photo.length * 1000 : 0));
-    const steps = [[1, ctx, 4200], [1, '', 4200], [1, '', 2600], [0.6, '', 2600], [0.6, '', 1500], [0.35, '', 1500], [0.35, '', 800], [0.2, '', 500]];
+    const sysText = (await withExtra(isPhoto ? AI_SYSTEM_PHOTO : own ? AI_SYSTEM_OWN : AI_SYSTEM)) + sInstr + medRule + GREET_RULE + BRAND_RULE, maxTok = (isPhoto ? 340 : own ? 260 : 240) + sExtra + (med ? 80 : 0);
+    // How much the AI can read at once is a setting (Ask > gear). Trim the background step by step until it fits: earlier conversation first, then the extra medical text, then the guide text.
+    const CAP = isPhoto ? CTX + 3072 : CTX, limit = Math.max(2400, Math.round((CAP - maxTok - 150) * 3.3) - (isPhoto ? photo.length * 1000 : 0));
+    const big = limit > 16000, mmax = big ? 9000 : 4200;
+    const steps = [[1, ctx, mmax], [1, '', mmax], [1, '', 2600], [0.6, '', 2600], [0.6, '', 1500], [0.35, '', 1500], [0.35, '', 800], [0.2, '', 500]];
     let fullPrompt = '', trimmed = 0;
     for (let k = 0; k < steps.length; k++) { fullPrompt = compose(...steps[k]); trimmed = k; if (sysText.length + fullPrompt.length <= limit) break; }
     const genOnce = pr => L.generate({ system: sysText, prompt: pr, maxTokens: maxTok, images: isPhoto ? photo : [] });
     let r;
     try { r = await genOnce(fullPrompt); }
     catch (e1) {
-      if (/too long|maximum number of tokens|exceeding/i.test(String(e1 && e1.message))) { phase = 'The question was long, so trying again with less background'; trimmed = 99; r = await genOnce(compose(0.2, '', 400)); }
+      if (/too long|maximum number of tokens|exceeding/i.test(String(e1 && e1.message))) { setStage('The question was long, so trying again with less background…'); trimmed = 99; r = await genOnce(compose(0.2, '', 400)); }
       else throw e1;
     }
-    $('#aifoot').textContent = `${looped ? 'Stopped automatically because the AI began repeating itself. ' : (stopped || r.stopped ? 'Stopped. ' : '')}Load ${sec(ld.ms)} s${ld.reused ? ' (already loaded)' : ''}, first words after ${r.firstMs >= 0 ? sec(r.firstMs) : '?'} s, finished after ${sec(r.ms)} s (${ld.backend}, ${ld.threads} threads). ${trimmed ? 'Long question: some background text was left out so the AI could read it. ' : ''}` + (own
-      ? 'Treat the AI\u2019s own ideas as suggestions, not facts, and prefer the safest option.'
-      : 'AI answers can be wrong: check the guides below.');
+    $o('.aifoot').textContent = `${looped ? 'Stopped automatically because the AI began repeating itself. ' : (stopped || r.stopped ? 'Stopped. ' : '')}Load ${dur(ld.ms)}${ld.reused ? ' (already loaded)' : ''}, first words after ${r.firstMs >= 0 ? dur(r.firstMs) : '?'}, finished after ${dur(r.ms)} (${ld.backend}, ${ld.threads} threads). ${trimmed ? 'Long question: some background text was left out so the AI could read it. ' : ''}` + (own
+      ? 'Treat the AI’s own ideas as suggestions, not facts, and prefer the safest option.'
+      : 'AI answers can be wrong: check the guides.');
+    Tasks.end(task, { tab: 'ask', toast: ASK_ON() ? '' : 'Your answer is ready' });
   } catch (e) {
-    $('#aifoot').textContent = (stopped ? 'Stopped. ' : 'The AI could not answer: ' + (e.message || e) + '. ') + 'The guides below still work.';
-    if (!stopped && out) out.insertAdjacentHTML('afterbegin', '<div class="warn"><b>The AI did not give an answer.</b> ' + esc(/too long|maximum number of tokens/i.test(String(e && e.message)) ? 'The question and its background were too long for it to read at once. Try asking it on its own, without ticked earlier chats.' : String(e && e.message || e)) + '</div>');
+    $o('.aifoot').textContent = (stopped ? 'Stopped. ' : 'The AI could not answer: ' + (e.message || e) + '. ') + 'The guides still work.';
+    if (!stopped) out.insertAdjacentHTML('afterbegin', '<div class="warn"><b>The AI did not give an answer.</b> ' + esc(/too long|maximum number of tokens/i.test(String(e && e.message)) ? 'The question and its background were too long for it to read at once. Raise "How much the AI can read at once" in the gear menu, or start a new chat.' : String(e && e.message || e)) + '</div>');
+    if (stopped) Tasks.end(task, { cancelled: true }); else Tasks.end(task, { error: true, msg: String(e && e.message || e).slice(0, 80), tab: 'ask' });
   } finally {
     clearInterval(tick);
-    const th = $('#aithink'); if (th) th.hidden = true;
-    if (tok) tok.remove(); const b = $('#aistop'); if (b) b.remove();
+    const th = $o('.think'); if (th) th.hidden = true;
+    if (tok) tok.remove();
     const sp = splitScores(shown), vals = Object.assign({}, sp.vals); if (meta && typeof meta.support === 'number') vals.support = meta.support;
     const body = tidy(sp.body.trim());
-    if (txt && shown.trim()) txt.textContent = body;
-    const box = shown.trim() ? scoreBox(onScores, mode, vals) : ''; if (box) { const f0 = $('#aifollow'); if (f0) f0.insertAdjacentHTML('beforebegin', box); }
-    if (shown.trim() && meta && meta.med && meta.med.links.length) { const f1 = $('#aifollow'); if (f1) f1.insertAdjacentHTML('beforebegin', '<p class="dim">Sources used: ' + meta.med.links.map(l => `<a href="${l.href}">${esc(l.label)}</a>`).join(' \u00b7 ') + '</p>'); }
+    if (txt && shown.trim()) { txt.hidden = false; txt.textContent = body; }
+    const after = $o('.aiafter');
+    const box = shown.trim() ? scoreBox(onScores, mode, vals) : ''; if (box && after) after.insertAdjacentHTML('beforeend', box);
+    if (shown.trim() && meta && meta.med && meta.med.links.length && after) after.insertAdjacentHTML('beforeend', '<p class="dim">Sources used: ' + meta.med.links.map(l => `<a href="${l.href}">${esc(l.label)}</a>`).join(' · ') + '</p>');
     const sline = box ? '\n\nScores (estimates): ' + onScores.filter(x => x.modes.includes(mode)).map(x => x.name + ' ' + (typeof vals[x.id] === 'number' ? vals[x.id] + '%' : 'not given')).join(', ') : '';
-    if (shown.trim()) {
-      const c = await saveChat(isPhoto ? '📷 ' + (q || PHOTO_Q) : q, body + sline, mode, hits.map(h => h.id));
-      const f = $('#aifollow'); if (f) { f.innerHTML = '<div class="row"><button id="aifu">Ask a follow-up</button><span class="dim">Saved to your chats.</span></div>'; $('#aifu').onclick = () => follow && follow(c.id); }
-    }
+    if (rec) { rec.a = body; rec.done = true; }
+    if (shown.trim()) await saveChat(isPhoto ? '📷 ' + (q || PHOTO_Q) : q, body + sline, mode, hits.map(h => h.id));
+    keep();
     if (done) done();
   }
 }
+const ASK_ON = () => { const c = document.querySelector('#tabs a.on'); return !!(c && c.dataset.t === 'ask'); };
 /* ---------- data / backup ---------- */
 async function exportAll() {
   await loadInv();
@@ -818,6 +927,8 @@ function showStorageWarning() {
 function route() {
   const h = decodeURIComponent(location.hash.slice(1) || '/'), p = h.split('/').filter(Boolean);
   $('#modal').hidden = true;
+  if (p[0] !== 'ask') { document.body.classList.remove('ask'); $('#composer').hidden = true; }
+  Tasks.clearBlip({ ask: 'ask', meds: 'meds', ency: 'meds', map: 'map', inventory: 'inventory', phrases: 'phrases', data: 'data' }[p[0]] || 'home');
   if (window.BHMap && p[0] !== 'map') { window.BHMap.leave(); view.className = ''; }
   if (!p.length) vHome();
   else if (p[0] === 'cat') vCat(p[1]);
@@ -837,6 +948,7 @@ function route() {
   if (p[0] !== 'e') window.scrollTo(0, 0);
 }
 $('#homeBtn').onclick = () => { location.hash = '#/'; };
+Tasks.init();
 $('#quickBtn').onclick = () => { location.hash = '#/e/quick-sheet'; };
 $('#searchForm').onsubmit = e => { e.preventDefault(); const q = $('#q').value.trim(); if (q) location.hash = '#/search/' + encodeURIComponent(q); $('#q').blur(); };
 window.addEventListener('hashchange', route);

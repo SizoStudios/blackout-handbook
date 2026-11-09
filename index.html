@@ -16,9 +16,12 @@
   <form id="searchForm" role="search" autocomplete="off">
     <input id="q" type="search" placeholder="Search everything…" aria-label="Search">
   </form>
+  <button id="taskPill" class="taskpill" aria-label="Running tasks" hidden></button>
   <button id="quickBtn" class="sos" aria-label="Quick sheet">QUICK</button>
 </header>
+<div id="taskPanel" hidden></div>
 <main id="view" tabindex="-1"></main>
+<div id="composer" hidden></div>
 <nav id="tabs" aria-label="Main">
   <a href="#/" data-t="home">Library</a>
   <a href="#/map" data-t="map">Map</a>

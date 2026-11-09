@@ -80,9 +80,9 @@
     const pk = await installed();
     if (!pk) {
       view.innerHTML = head() + note('<b>The medical encyclopedia is an optional pack.</b> It holds about the conditions, injuries, poisoning, first aid, infections, anatomy, tests and medicines that Wikipedia explains, shortened for offline use. Add <code>Encyclopedia-Medical.bhmap</code> from the flash drive (Map-Packs folder) below.') +
-        `<div class="row"><input type="file" id="encin"></div><div class="bar" id="encbar" hidden><i></i></div><p class="dim" id="encmsg"></p>`;
-      $('#encin').onchange = async e => { const f = e.target.files[0]; if (!f) return; const m = $('#encmsg'); m.textContent = 'Adding ' + f.name + '… keep the app open.'; $('#encbar').hidden = false;
-        try { await window.BHMap.importPack(f, (d, t) => { m.textContent = 'Adding ' + f.name + ' (' + d + ' of ' + t + ' parts)'; }); m.textContent = 'Added.'; open(view, sub); } catch (err) { m.textContent = 'Failed: ' + (err.message || err); $('#encbar').hidden = true; } };
+        `<div class="row"><input type="file" id="encin"></div><div id="enctask"></div><p class="dim" id="encmsg"></p>`;
+      $('#encin').onchange = async e => { const f = e.target.files[0]; if (!f) return; const m = $('#encmsg'); m.textContent = 'Adding ' + f.name + '. You can leave this screen: a round badge at the top shows how far it has got.';
+        try { await window.BHMap.importPack(f, null, { onTask: T => { const bx = $('#enctask'); if (bx && window.BHTasks) window.BHTasks.mount(bx, T); } }); m.textContent = 'Added.'; open(view, sub); } catch (err) { m.textContent = String(err && err.message) === 'cancelled' ? 'Cancelled. Nothing was kept from this file.' : 'Failed: ' + (err.message || err); } };
       return;
     }
     let ix; try { ix = await load(); } catch (e) { view.innerHTML = head() + note('The encyclopedia could not be read. ' + esc(e.message), 'warn'); return; }

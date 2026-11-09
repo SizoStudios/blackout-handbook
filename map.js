@@ -79,26 +79,42 @@ async function loadPacks() {
   const ov = M.packs.find(p => p.pack === 'roads-ov'); M.hasOv = !!ov;
   M.sat.regions = M.packs.filter(p => p.pack === 'imagery').map(p => p.region); await loadSatKeys();
 }
-async function importPack(file, progress) {
+async function importPack(file, progress, opts = {}) {
   const head = new Uint8Array(await file.slice(0, 11).arrayBuffer());
   if (String.fromCharCode(...head.slice(0, 6)) !== 'BHMAP1') throw new Error('That is not a map pack file.');
   const hl = new DataView(head.buffer).getUint32(7, true), hdr = JSON.parse(await file.slice(11, 11 + hl).text()), base = 11 + hl;
   if (!DB.db) throw new Error('This device would not let the app save data, so map packs cannot be stored.');
-  // replace an older copy of the same pack
-  const id = hdr.pack + ':' + hdr.region;
-  let batch = [], bytes = 0, done = 0, total = hdr.entries.length;
-  const flush = () => new Promise((res, rej) => { if (!batch.length) return res(); const t = DB.db.transaction('mapdata', 'readwrite'), s = t.objectStore('mapdata'); batch.forEach(r => s.put(r)); t.oncomplete = () => { batch = []; bytes = 0; res(); }; t.onerror = () => rej(t.error); t.onabort = () => rej(t.error || new Error('Storage is full.')); });
-  for (const e of hdr.entries) {
-    const d = await file.slice(base + e.o, base + e.o + e.l).arrayBuffer();
-    batch.push({ k: e.k, d }); bytes += e.l; done++;
-    if (bytes > 6 * 1048576 || batch.length > 400) { await flush(); if (progress) progress(done, total); }
+  const id = hdr.pack + ':' + hdr.region, tab = hdr.pack === 'ency' ? 'meds' : 'map', nice = hdr.pack === 'ency' ? 'the encyclopedia' : hdr.pack === 'imagery' ? 'satellite photos' : 'a map pack';
+  // shown in the round progress badge, the header pill and (if wanted) on the screen; it can be paused or cancelled
+  const T = window.BHTasks ? window.BHTasks.start({ kind: 'upload', label: 'Adding ' + String(hdr.name || file.name).slice(0, 70), short: 'Adding ' + nice.replace('the ', ''), pct: 0, canPause: true, canCancel: true, tab }) : null;
+  if (T && opts.onTask) opts.onTask(T);
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  let batch = [], bytes = 0, done = 0; const total = hdr.entries.length, written = [];
+  const del = async keys => { for (let i = 0; i < keys.length; i += 500) await new Promise(res => { const t = DB.db.transaction('mapdata', 'readwrite'), s = t.objectStore('mapdata'); keys.slice(i, i + 500).forEach(k => s.delete(k)); t.oncomplete = res; t.onerror = res; t.onabort = res; }); };
+  const flush = () => new Promise((res, rej) => { if (!batch.length) return res(); const keys = batch.map(r => r.k), t = DB.db.transaction('mapdata', 'readwrite'), s = t.objectStore('mapdata'); batch.forEach(r => s.put(r)); t.oncomplete = () => { written.push(...keys); batch = []; bytes = 0; res(); }; t.onerror = () => rej(t.error); t.onabort = () => rej(t.error || new Error('Storage is full.')); });
+  try {
+    // a mix of an older and a newer copy of the same pack would be wrong, so the older copy goes first
+    const old = M.packs.find(p => p.id === id); if (old) await removePack(old.id);
+    for (const e of hdr.entries) {
+      const d = await file.slice(base + e.o, base + e.o + e.l).arrayBuffer();
+      batch.push({ k: e.k, d }); bytes += e.l; done++;
+      if (bytes > 6 * 1048576 || batch.length > 400) {
+        await flush(); if (progress) progress(done, total);
+        if (T) { window.BHTasks.update(T, { pct: Math.min(99, Math.floor(done * 100 / total)) }); while (T.paused && !T.cancelled) await sleep(250); if (T.cancelled) throw new Error('cancelled'); }
+      }
+    }
+    await flush(); if (progress) progress(total, total);
+    const meta = { id, pack: hdr.pack, region: hdr.region, name: hdr.name, version: hdr.version, created: hdr.created, entries: total, mb: +(file.size / 1048576).toFixed(1), licence: hdr.licence, info: hdr.info || null, added: Date.now() };
+    const list = (await kvGet('map.packs', [])).filter(p => p.id !== id); list.push(meta); await kvSet('map.packs', list);
+    M.cells.clear(); M.pending.clear(); M.base = null; M.places = null; M.terrain = false;
+    await loadPacks();
+    if (T) window.BHTasks.end(T, { tab, toast: 'Finished adding ' + nice });
+    return meta;
+  } catch (err) {
+    try { await del(written); } catch (e) {}
+    if (T) window.BHTasks.end(T, String(err && err.message) === 'cancelled' ? { cancelled: true } : { error: true, msg: String(err && err.message || err).slice(0, 80) });
+    throw err;
   }
-  await flush(); if (progress) progress(total, total);
-  const meta = { id, pack: hdr.pack, region: hdr.region, name: hdr.name, version: hdr.version, created: hdr.created, entries: total, mb: +(file.size / 1048576).toFixed(1), licence: hdr.licence, info: hdr.info || null, added: Date.now() };
-  const list = (await kvGet('map.packs', [])).filter(p => p.id !== id); list.push(meta); await kvSet('map.packs', list);
-  M.cells.clear(); M.pending.clear(); M.base = null; M.places = null; M.terrain = false;
-  await loadPacks();
-  return meta;
 }
 async function removePack(id) {
   const meta = M.packs.find(p => p.id === id); if (!meta) return;
@@ -553,7 +569,7 @@ function sel(k, label, opts) { return `<label>${label}</label><select data-s="${
 function tog(k, label) { return `<label class="lay"><input type="checkbox" data-t="${k}"${P[k] ? ' checked' : ''}><span><b>${label}</b></span></label>`; }
 function openSettings() {
   const s = openSheet(`<div class="row"><b style="flex:1">Map settings</b><button id="shX">Close</button></div>
-  <h3>Map packs</h3><div id="packList"><p class="dim">Checking what is on this device…</p></div><label>Add map packs from the flash drive or Downloads (.bhmap). You can choose several at once, and add the missing ones later.</label><input type="file" id="packIn" multiple><div class="bar" id="packBar" hidden><i></i></div><p class="dim" id="packMsg"></p><div id="packLog"></div>
+  <h3>Map packs</h3><div id="packList"><p class="dim">Checking what is on this device…</p></div><label>Add map packs from the flash drive or Downloads (.bhmap). You can choose several at once, and add the missing ones later.</label><input type="file" id="packIn" multiple><div id="packTask"></div><p class="dim" id="packMsg"></p><div id="packLog"></div>
   <h3>When the map opens</h3>${sel('start', 'Start the map at', [['last', 'Where I left it'], ['gps', 'My GPS position'], ['home', 'My home spot'], ['all', 'The whole region']])}<div class="row"><button id="setHome">Use the map centre as my home spot</button></div>
   <h3>Units and numbers</h3>${sel('units', 'Distances', [['km', 'Kilometres and metres'], ['mi', 'Miles and feet']])}${sel('coord', 'Coordinates', [['dec', 'Decimal degrees'], ['dms', 'Degrees, minutes, seconds']])}${sel('theme', 'Map colours', [['auto', 'Follow the app'], ['dark', 'Dark'], ['light', 'Light'], ['contrast', 'High contrast'], ['night', 'Night (red)']])}${sel('townMin', 'Towns shown', [['auto', 'Automatic by zoom'], ['all', 'All towns'], ['5k', 'Over 5,000 people'], ['20k', 'Over 20,000'], ['100k', 'Over 100,000']])}
   <h3>Sizes</h3>${range('icon', 'Icon size', 40, 320, 5, '%')}${range('label', 'Text size', 60, 260, 5, '%')}${range('line', 'Line thickness', 50, 320, 5, '%')}${tog('iconAuto', 'Icons grow and shrink as you zoom')}${tog('names', 'Show names of shops and buildings when zoomed in close')}<div class="row"><button id="szReset">Back to default sizes</button></div>
@@ -639,7 +655,7 @@ async function refreshPackList() {
   box.innerHTML = '<p><b>' + ok + ' of ' + KNOWN.length + ' map packs added.</b>' + (missing.length ? ' <span class="dim">Still to add: ' + esc(missing.join(', ')) + '</span>' : ' Everything is in.') + '</p>' + rows.join('') + '<p style="margin-top:14px"><b>Satellite photos</b> <span class="dim">(optional: add only the areas you want)</span></p>' + photoRows.join('') + '<p style="margin-top:14px"><b>Reference packs</b> <span class="dim">(optional)</span></p>' + refRows.join('') + extra;
 }
 async function addPacks(files) {
-  const bar = $('#packBar'), msg = $('#packMsg'), log = $('#packLog'), res = []; if (bar) bar.hidden = false;
+  const bar = null, msg = $('#packMsg'), log = $('#packLog'), res = [];
   const list = [...files], paint = () => { if (log) log.innerHTML = res.map(r => '<div class="' + (r.skipped ? 'dim' : r.ok ? 'ok' : 'bad') + '">' + (r.skipped ? '○ Skipped (' + (r.why || 'already on this device') + ')' : r.ok ? '✓ Added' : '✗ Failed') + ': ' + esc(r.name) + (r.ok ? '' : ' — ' + esc(r.err)) + (r.note ? '<br><span class="dim">' + esc(r.note) + '</span>' : '') + '</div>').join(''); };
   for (let i = 0; i < list.length; i++) {
     const f = list[i]; if (msg) msg.textContent = 'File ' + (i + 1) + ' of ' + list.length + ': checking ' + f.name + '…';
@@ -649,8 +665,8 @@ async function addPacks(files) {
     else if (id && COVERED_BY[id] && M.packs.some(p => p.id === COVERED_BY[id])) why = 'the Cape Region photos already cover it'; skip = !confirm('The Cape Region photos are already on this device and already cover the Peninsula. Add the Peninsula pack as well? It would use about 16 MB more and show nothing extra.');
     if (skip) { res.push({ ok: true, skipped: true, why: why || 'already on this device', name: f.name }); paint(); continue; }
     if (msg) msg.textContent = 'File ' + (i + 1) + ' of ' + list.length + ': adding ' + f.name + '…';
-    try { await importPack(f, (d, t) => { if (msg) msg.textContent = 'File ' + (i + 1) + ' of ' + list.length + ': ' + f.name + ' (' + d + ' of ' + t + ' parts)'; }); if (id && Object.values(COVERED_BY).includes(id) && M.packs.some(p => COVERED_BY[p.id] === id)) note = 'This pack covers the Cape Peninsula pack already on this device. You can remove the Peninsula pack in the list below to save 16 MB.'; res.push({ ok: true, name: f.name, note }); }
-    catch (e) { res.push({ ok: false, name: f.name, err: e && e.message ? e.message : 'unknown problem' }); }
+    try { await importPack(f, (d, t) => { if (msg) msg.textContent = 'File ' + (i + 1) + ' of ' + list.length + ': ' + f.name + ' (' + d + ' of ' + t + ' parts)'; }, { onTask: T => { const bx = $('#packTask'); if (bx && window.BHTasks) window.BHTasks.mount(bx, T); } }); if (id && Object.values(COVERED_BY).includes(id) && M.packs.some(p => COVERED_BY[p.id] === id)) note = 'This pack covers the Cape Peninsula pack already on this device. You can remove the Peninsula pack in the list below to save 16 MB.'; res.push({ ok: true, name: f.name, note }); }
+    catch (e) { if (e && e.message === 'cancelled') res.push({ ok: true, skipped: true, why: 'cancelled', name: f.name }); else res.push({ ok: false, name: f.name, err: e && e.message ? e.message : 'unknown problem' }); }
     paint();
   }
   const nAdd = res.filter(r => r.ok && !r.skipped).length, nSkip = res.filter(r => r.skipped).length;
@@ -701,7 +717,7 @@ async function boot() {
 function noPacksHtml() {
   return `<div class="mp-empty"><h2>Map</h2><p>The map works with no internet, but it needs its map packs first. Copy them once from the flash drive.</p>
   <ol><li>On the flash drive open the <b>Map-Packs</b> folder.</li><li>Tap the button below and choose <b>Base-Terrain-Places.bhmap</b>, then the <b>Roads</b> files (South Africa first). You can pick several at once.</li><li>When it says Added, the map opens.</li></ol>
-  <div id="packList"></div><input type="file" id="packIn" multiple><div class="bar" id="packBar" hidden><i></i></div><p class="dim" id="packMsg"></p><div id="packLog"></div>
+  <div id="packList"></div><input type="file" id="packIn" multiple><div id="packTask"></div><p class="dim" id="packMsg"></p><div id="packLog"></div>
   <p class="dim">Map data: OpenStreetMap contributors (ODbL), Natural Earth, AWS Terrain Tiles. The packs are only stored on this device.</p></div>`;
 }
 async function open(view, sub) {
