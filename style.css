@@ -285,3 +285,11 @@ body.ask #toast{bottom:calc(var(--navh) + var(--cph) + 16px + env(safe-area-inse
 #top{flex-wrap:wrap;row-gap:4px}
 #brand{flex:0 0 100%;text-align:center;font-size:.7rem;font-weight:800;letter-spacing:.22em;text-transform:uppercase;color:var(--acc);line-height:1;padding:2px 0 0}
 #taskPanel{top:calc(76px + env(safe-area-inset-top))}
+/* PIN lock */
+.pinov{position:fixed;inset:0;z-index:400;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(var(--bgrgb),.93);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
+.pinbox{width:100%;max-width:360px;max-height:92vh;overflow:auto;background:var(--bg2);border:1px solid var(--line);border-radius:var(--r);padding:18px;box-shadow:0 12px 40px rgba(0,0,0,.45)}
+.pinbox h2{margin:0 0 6px}
+.pinbox input[type=password]{width:100%;box-sizing:border-box;font-size:1.4rem;letter-spacing:.4em;text-align:center;margin:6px 0;padding:10px;background:var(--bg3);color:var(--fg);border:1px solid var(--line);border-radius:10px}
+.pinbox input::placeholder{letter-spacing:0;font-size:.95rem;color:var(--dim)}
+.pinbox label.ck,#pinbox label.ck{display:flex;gap:10px;align-items:center;margin:6px 0;color:var(--fg)}
+.pinbox .row{margin-top:10px}

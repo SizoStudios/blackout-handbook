@@ -213,7 +213,7 @@ async function vInv() {
   ${cf.length ? `<h2>Storage safety (${cf.length})</h2>${cf.map(c => `<div class="${c.sev === 'bad' ? 'warn' : 'note'}">${esc(c.msg)}</div>`).join('')}` : inv.length ? '<div class="note">No storage clashes found from what you have listed. Keep lists up to date for this to be useful.</div>' : ''}
   <h2>Stock</h2><div class="list">${sorted.map(i => `<a class="card inv" href="#/inventory/${i.k}">${photos[i.k] ? `<img src="${photos[i.k]}" alt="">` : ''}<div class="t"><b>${esc(i.name)}</b> <span class="dim">× ${esc(i.qty)} ${esc(i.unit || '')}</span><br><span class="dim">${esc(i.loc || '')} · ${esc(HZ[i.hz] || '')}</span>${i.exp ? `<br><span class="${expState(i.exp)}">Expiry ${esc(i.exp)}</span>` : ''}</div></a>`).join('') || '<p class="dim">Nothing yet. Add your supplies, with a photo if you like, and the app will check storage and expiry for you.</p>'}</div>`;
   $('#add').onclick = () => invForm();
-  const st = $('#starter'); if (st) st.onclick = async () => { for (const s of STARTER) await DB.put('inv', { k: uid(), name: s[0], hz: s[1], qty: s[2], unit: s[3], loc: s[4], exp: '', notes: '', u: Date.now() }); vInv(); };
+  const st = $('#starter'); if (st) st.onclick = async () => { for (const s of STARTER) await DB.put('inv', { k: uid(), name: s[0], hz: s[1], qty: s[2], unit: s[3], loc: s[4], exp: '', notes: '', u: Date.now() }); vInv(); Pin.offer(); };
 }
 function opts(o, sel) { return Object.entries(o).map(([k, v]) => `<option value="${k}"${k === sel ? ' selected' : ''}>${esc(v)}</option>`).join(''); }
 async function invForm(id) {
@@ -244,7 +244,7 @@ async function invForm(id) {
     const k = it ? it.k : uid();
     await DB.put('inv', { k, name, qty: $('#f_qty').value, unit: $('#f_unit').value.trim(), hz: $('#f_hz').value, loc: $('#f_loc').value, exp: $('#f_exp').value, notes: $('#f_notes').value, u: Date.now() });
     if (photo) await DB.put('photos', { k, data: photo });
-    m.hidden = true; location.hash = '#/inventory'; vInv();
+    m.hidden = true; location.hash = '#/inventory'; vInv(); Pin.offer();
   };
 }
 // Returns a small JPEG data URL, or null if cancelled. Uses the native camera/gallery in the Android app, a file picker elsewhere.
@@ -404,6 +404,7 @@ const MAX_CHATS = 200, MAX_CTX = 3;
 const getChats = () => kvGet('chats', []);
 async function saveChat(q, a, mode, guideIds) {
   const c = { id: uid(), q, a, mode, g: guideIds, u: Date.now() };
+  if (Pin.locked('chats')) return c;   // locked: never overwrite the protected chats
   const all = [c].concat(await getChats());
   const kept = []; let n = 0;
   for (const x of all) { if (x.pin || n < MAX_CHATS) { kept.push(x); if (!x.pin) n++; } else await tomb(x.id); }
@@ -420,6 +421,7 @@ async function contextText() {
 async function paintChats() {
   const cs = await getChats(); const cn = $('#chatn'); if (cn) cn.textContent = cs.length ? `(${cs.length})` : '';
   const box = $('#chats'); if (!box) return;
+  if (Pin.locked('chats')) { box.innerHTML = '<p class="dim">Saved chats are locked. <button id="unlchats">Enter PIN</button></p>'; const ub = $('#unlchats'); if (ub) ub.onclick = () => Pin.need('chats').then(ok => ok && paintChats()); return; }
   if (!cs.length) { box.innerHTML = '<p class="dim">Nothing saved yet. Each AI answer is saved on this device, so you can use it as background later.</p>'; return; }
   const sorted = cs.slice().sort((a, b) => (!!b.pin - !!a.pin) || b.u - a.u);
   box.innerHTML = `<p class="dim">Tick up to ${MAX_CTX} to give the AI as background for your next question. Each one adds to the time it spends reading. <span id="ctxn"></span></p>` +
@@ -801,10 +803,203 @@ async function runAI(out, q, hits, mode, ctx, done, photo, meta, rec) {
   }
 }
 const ASK_ON = () => { const c = document.querySelector('#tabs a.on'); return !!(c && c.dataset.t === 'ask'); };
+/* ---------- PIN lock: a 4 to 6 digit PIN that locks AND encrypts the parts of the app the person chooses (on this device only) ---------- */
+// How it works: a random data key encrypts the chosen records (AES-GCM). The data key is itself wrapped with a key made from the PIN
+// (PBKDF2, 200,000 rounds). Wrong PINs are slowed down after 5 tries. A forgotten PIN cannot be recovered: the protected items can only be erased.
+const Pin = (() => {
+  const enc = new TextEncoder(), dec = new TextDecoder();
+  const NAMES = { inv: 'Supplies and go-bag', pins: 'Locations (map pins)', people: 'My people', notes: 'Notes', chats: 'Saved AI chats' };
+  const KVK = { inv: ['gobag'], pins: ['pins'], people: ['people'], notes: ['notes'], chats: ['chats'] };
+  const KV_SCOPE = { gobag: 'inv', pins: 'pins', people: 'people', notes: 'notes', chats: 'chats' };
+  let cfg = null, key = null, lastAct = Date.now(), hiddenAt = 0, offered = false, asking = null;
+  const hasCrypto = () => !!(window.crypto && crypto.subtle);
+  const b64 = u => { u = new Uint8Array(u); let s = ''; for (let i = 0; i < u.length; i += 8192) s += String.fromCharCode.apply(null, u.subarray(i, i + 8192)); return btoa(s); };
+  const unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+  const scopeOf = (s, k) => (s === 'inv' || s === 'photos') ? 'inv' : (s === 'kv' ? KV_SCOPE[k] || null : null);
+  const on = sc => !!(cfg && cfg.scopes && cfg.scopes[sc]);
+  const locked = sc => !!sc && on(sc) && !key;
+  const saveCfg = () => kvSet('pinCfg', cfg);
+  const weak = p => /^(\d)\1+$/.test(p) || '0123456789'.includes(p) || '9876543210'.includes(p);
+  const kek = async (pin, salt, iter) => {
+    const m = await crypto.subtle.importKey('raw', enc.encode(pin), 'PBKDF2', false, ['deriveKey']);
+    return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: iter, hash: 'SHA-256' }, m, { name: 'AES-GCM', length: 256 }, false, ['wrapKey', 'unwrapKey']);
+  };
+  const seal = async rec => { const iv = crypto.getRandomValues(new Uint8Array(12)), body = Object.assign({}, rec); delete body.k; return { k: rec.k, e: 1, iv, ct: await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(JSON.stringify(body))) }; };
+  const unseal = async r => Object.assign({ k: r.k }, JSON.parse(dec.decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: r.iv }, key, r.ct))));
+
+  // The storage layer reads and writes encrypted records transparently. Locked data simply is not returned, and cannot be overwritten.
+  const rawGet = DB.get.bind(DB), rawPut = DB.put.bind(DB), rawAll = DB.all.bind(DB);
+  DB.get = async (s, k) => { const r = await rawGet(s, k); if (!r || !r.e) return r; if (!key) return undefined; try { return await unseal(r); } catch (e) { return undefined; } };
+  DB.all = async s => { const out = []; for (const r of await rawAll(s)) { if (!r.e) { out.push(r); continue; } if (!key) continue; try { out.push(await unseal(r)); } catch (e) {} } return out; };
+  DB.put = async (s, v) => { const sc = scopeOf(s, v && v.k); if (sc && on(sc)) { if (!key) throw new Error('locked'); return rawPut(s, await seal(v)); } return rawPut(s, v); };
+
+  const recordsOf = async sc => {
+    const out = [];
+    if (sc === 'inv') { for (const r of await DB.all('inv')) out.push(['inv', r]); for (const r of await DB.all('photos')) out.push(['photos', r]); }
+    for (const k of KVK[sc]) { const r = await DB.get('kv', k); if (r) out.push(['kv', r]); }
+    return out;
+  };
+  const enable = async sc => { const rs = await recordsOf(sc); cfg.scopes[sc] = true; await saveCfg(); for (const [s, r] of rs) await DB.put(s, r); };
+  const disable = async sc => { const rs = await recordsOf(sc); cfg.scopes[sc] = false; await saveCfg(); for (const [s, r] of rs) await rawPut(s, r); };
+
+  async function setup(pin, scopes) {
+    const salt = crypto.getRandomValues(new Uint8Array(16)), iter = 200000, iv = crypto.getRandomValues(new Uint8Array(12));
+    const dk = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
+    const wrapped = await crypto.subtle.wrapKey('raw', dk, await kek(pin, salt, iter), { name: 'AES-GCM', iv });
+    cfg = { v: 1, salt: b64(salt), iter, iv: b64(iv), wk: b64(wrapped), scopes: { inv: false, pins: false, people: false, notes: false, chats: false }, lock: 5, fails: 0, until: 0 };
+    key = dk; await saveCfg(); touch();
+    for (const sc in scopes) if (scopes[sc]) await enable(sc);
+  }
+  async function rewrap(pin) {
+    const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
+    const wrapped = await crypto.subtle.wrapKey('raw', key, await kek(pin, salt, cfg.iter), { name: 'AES-GCM', iv });
+    cfg.salt = b64(salt); cfg.iv = b64(iv); cfg.wk = b64(wrapped); await saveCfg();
+  }
+  const delay = n => Math.min(3600e3, 30e3 * 2 ** Math.max(0, n - 5));
+  async function unlock(pin) {
+    if (!cfg) return { ok: true };
+    const now = Date.now(); if (cfg.until > now) return { ok: false, wait: Math.ceil((cfg.until - now) / 1000) };
+    try {
+      key = await crypto.subtle.unwrapKey('raw', unb64(cfg.wk), await kek(pin, unb64(cfg.salt), cfg.iter), { name: 'AES-GCM', iv: unb64(cfg.iv) }, { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
+      cfg.fails = 0; cfg.until = 0; await saveCfg(); touch(); return { ok: true };
+    } catch (e) {
+      cfg.fails = (cfg.fails || 0) + 1; cfg.until = cfg.fails >= 5 ? Date.now() + delay(cfg.fails) : 0; await saveCfg();
+      return { ok: false, wait: cfg.until ? Math.ceil((cfg.until - Date.now()) / 1000) : 0, left: Math.max(0, 5 - cfg.fails) };
+    }
+  }
+  async function erase() {   // forgotten PIN: the protected items cannot be opened, so they are removed and the PIN is cleared
+    if (!cfg) return;
+    if (on('inv')) { await DB.clear('inv'); await DB.clear('photos'); }
+    for (const sc in cfg.scopes) if (cfg.scopes[sc]) for (const k of KVK[sc]) await DB.del('kv', k);
+    await DB.del('kv', 'pinCfg'); cfg = null; key = null; inv = []; photos = {};
+  }
+
+  function lockNow() {
+    if (!key) return; key = null; inv = []; photos = {};
+    const m = $('#modal'); if (m) m.hidden = true;
+    if (/^#\/(inventory|gobag|people|notes|map)/.test(location.hash)) location.hash = '#/';
+    try { appToast('Locked. Enter your PIN to open protected items again.'); } catch (e) {}
+  }
+  const touch = () => { lastAct = Date.now(); };
+  ['pointerdown', 'keydown', 'touchstart', 'wheel'].forEach(e => window.addEventListener(e, touch, { passive: true, capture: true }));
+  setInterval(() => { if (key && cfg && cfg.lock > 0 && Date.now() - lastAct > cfg.lock * 60000) lockNow(); }, 15000);
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) { hiddenAt = Date.now(); if (key && cfg && cfg.lock === 0) lockNow(); }
+    else if (key && cfg && cfg.lock > 0 && hiddenAt && Date.now() - hiddenAt > cfg.lock * 60000) lockNow();
+  });
+
+  // ----- screens -----
+  const overlay = html => { const d = document.createElement('div'); d.className = 'pinov'; d.innerHTML = '<div class="pinbox">' + html + '</div>'; document.body.appendChild(d); return d; };
+  const pinField = (id, ph) => `<input id="${id}" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off" placeholder="${ph}">`;
+  const digits = v => String(v || '').replace(/\D/g, '').slice(0, 6);
+  const names = () => Object.keys(cfg.scopes).filter(sc => cfg.scopes[sc]).map(sc => NAMES[sc]).join(', ') || 'your protected items';
+
+  // Ask for the PIN. Resolves true when unlocked, false when the person chooses not to.
+  function ask() {
+    if (key || !cfg) return Promise.resolve(true);
+    if (asking) return asking;
+    asking = new Promise(res => {
+      const d = overlay(`<h2>Enter your PIN</h2><p class="dim">It opens: ${esc(names())}.</p>${pinField('pinin', 'PIN')}<p class="warn" id="pinmsg" hidden></p><div class="row"><button class="pri" id="pinok">Unlock</button><button id="pinno">Not now</button></div><p class="dim"><a href="#" id="pinforgot">Forgot your PIN?</a></p>`);
+      const inp = d.querySelector('#pinin'), msg = d.querySelector('#pinmsg'), ok = d.querySelector('#pinok');
+      const done = v => { d.remove(); asking = null; res(v); };
+      const say = t => { msg.textContent = t; msg.hidden = !t; };
+      let tm = null;
+      const submit = async () => {
+        const pin = digits(inp.value); if (pin.length < 4) { say('Enter your 4 to 6 digit PIN.'); return; }
+        ok.disabled = true; const r = await unlock(pin); ok.disabled = false;
+        if (r.ok) return done(true);
+        inp.value = ''; inp.focus();
+        if (r.wait) { say('Too many wrong tries. Wait ' + r.wait + ' seconds.'); ok.disabled = true; clearTimeout(tm); tm = setTimeout(() => { ok.disabled = false; say(''); }, r.wait * 1000); }
+        else say('Wrong PIN. ' + (r.left ? r.left + (r.left === 1 ? ' try' : ' tries') + ' left before a short wait.' : ''));
+      };
+      ok.onclick = submit; inp.onkeydown = e => { if (e.key === 'Enter') submit(); };
+      d.querySelector('#pinno').onclick = () => done(false);
+      d.querySelector('#pinforgot').onclick = async e => {
+        e.preventDefault();
+        if (!confirm('If you forgot the PIN, the protected items (' + names() + ') cannot be opened by anyone, and can only be erased from this device. Backup files you saved earlier are not affected.\n\nErase them now and remove the PIN?')) return;
+        if (!confirm('Last check: this permanently erases ' + names() + ' on this device. Erase?')) return;
+        await erase(); done(true);
+      };
+      setTimeout(() => inp.focus(), 50);
+    });
+    return asking;
+  }
+  const need = sc => locked(sc) ? ask() : Promise.resolve(true);
+  const needAll = () => { const sc = cfg && Object.keys(cfg.scopes).find(s => locked(s)); return sc ? ask() : Promise.resolve(true); };
+
+  // Set a new PIN (scopes = which parts it protects) or just choose a new one (change).
+  function setupDialog(o) {
+    return new Promise(res => {
+      const change = !!o.change;
+      const d = overlay(`<h2>${change ? 'Choose a new PIN' : 'Protect with a PIN'}</h2><p class="dim">${esc(o.intro || '')}</p>${pinField('pin1', 'PIN (4 to 6 digits)')}${pinField('pin2', 'Type it again')}
+        ${change ? '' : `<p class="dim" style="margin:10px 0 2px">What the PIN protects</p>${Object.keys(NAMES).map(sc => `<label class="ck"><input type="checkbox" data-sc="${sc}"${sc === 'inv' || sc === 'pins' ? ' checked' : ''}> ${esc(NAMES[sc])}</label>`).join('')}`}
+        <p class="warn" id="pinmsg" hidden></p><div class="row"><button class="pri" id="pinok">${change ? 'Change PIN' : 'Set PIN'}</button><button id="pinno">${change ? 'Cancel' : 'Not now'}</button></div>
+        <p class="dim">If you forget the PIN, protected items cannot be recovered. Backup files are not protected by the PIN.</p>`);
+      const msg = d.querySelector('#pinmsg'), say = t => { msg.textContent = t; msg.hidden = !t; }, done = v => { d.remove(); res(v); };
+      d.querySelector('#pinno').onclick = () => done(false);
+      d.querySelector('#pinok').onclick = async () => {
+        const a = digits(d.querySelector('#pin1').value), b = digits(d.querySelector('#pin2').value);
+        if (a.length < 4) return say('The PIN must be 4 to 6 digits.');
+        if (a !== b) return say('The two PINs do not match.');
+        if (weak(a)) return say('Too easy to guess (like 1234 or 0000). Choose another.');
+        if (!hasCrypto()) return say('This device cannot lock data safely (no encryption support).');
+        d.querySelector('#pinok').disabled = true;
+        try {
+          if (change) await rewrap(a);
+          else { const sc = {}; d.querySelectorAll('input[data-sc]').forEach(c => sc[c.dataset.sc] = c.checked); await setup(a, sc); }
+        } catch (e) { d.querySelector('#pinok').disabled = false; return say('Could not set the PIN: ' + (e.message || e)); }
+        try { appToast(change ? 'PIN changed.' : 'PIN set.'); } catch (e) {}
+        done(true);
+      };
+      setTimeout(() => d.querySelector('#pin1').focus(), 50);
+    });
+  }
+  // Offered after the first supply or location is saved (and again at the next start while no PIN is set).
+  async function offer() {
+    if (cfg || offered || !hasCrypto()) return; offered = true;
+    await setupDialog({ intro: 'Supplies and locations can show where you keep things and where you are. Protect them with a PIN of 4 to 6 digits so only you can open them. You can change what it covers in Settings.' });
+  }
+
+  // The Settings card.
+  function mount(el) {
+    const render = () => {
+      if (!cfg) { el.innerHTML = `<p>Lock parts of the app with a PIN of 4 to 6 digits. The locked parts are also encrypted on this device. Supplies and locations are offered for protection as soon as you save your first one.</p><p class="dim">No PIN set.</p><div class="row"><button class="pri" id="pset">Set a PIN</button></div>`; el.querySelector('#pset').onclick = async () => { await setupDialog({ intro: 'Choose a PIN and what it protects.' }); render(); }; return; }
+      el.innerHTML = `<p><span class="${key ? 'ok' : 'warn'}" style="padding:2px 8px;border-radius:99px">${key ? 'Unlocked' : 'Locked'}</span> PIN is on.</p>
+        <p class="dim" style="margin-bottom:2px">What the PIN protects</p>${Object.keys(NAMES).map(sc => `<label class="ck"><input type="checkbox" data-sc="${sc}"${on(sc) ? ' checked' : ''}> ${esc(NAMES[sc])}</label>`).join('')}
+        <label>Lock again</label><select id="pinlock">${[[0, 'as soon as I leave the app'], [1, 'after 1 minute without use'], [5, 'after 5 minutes without use'], [15, 'after 15 minutes without use'], [60, 'after 1 hour without use']].map(([n, t]) => `<option value="${n}"${cfg.lock === n ? ' selected' : ''}>${t}</option>`).join('')}</select>
+        <div class="row"><button id="pinlk">Lock now</button><button id="pinch">Change PIN</button><button class="dng" id="pinrm">Remove PIN</button></div>
+        <p class="dim">If you forget the PIN, protected items cannot be recovered (you can only erase them). Backup files you save are <b>not</b> protected by the PIN, so keep them safe.</p>`;
+      el.querySelectorAll('input[data-sc]').forEach(c => c.onchange = async () => {
+        if (!(await ask())) return render();
+        c.disabled = true; try { c.checked ? await enable(c.dataset.sc) : await disable(c.dataset.sc); } catch (e) { alert('Could not change this: ' + (e.message || e)); } render();
+      });
+      el.querySelector('#pinlock').onchange = async e => { cfg.lock = +e.target.value; await saveCfg(); };
+      el.querySelector('#pinlk').onclick = () => { lockNow(); render(); };
+      el.querySelector('#pinch').onclick = async () => { if (!(await ask())) return; await setupDialog({ change: true, intro: 'Choose your new PIN.' }); render(); };
+      el.querySelector('#pinrm').onclick = async () => {
+        if (!(await ask())) return;
+        if (!confirm('Remove the PIN? Your items stay on this device but will no longer be locked or encrypted.')) return;
+        for (const sc of Object.keys(cfg.scopes)) if (cfg.scopes[sc]) await disable(sc);
+        await DB.del('kv', 'pinCfg'); cfg = null; key = null; render();
+      };
+    };
+    render();
+  }
+
+  async function init() {
+    const r = await rawGet('kv', 'pinCfg'); cfg = r && r.v ? r.v : null;
+    if (!cfg) {   // no PIN yet: if there is already something worth protecting, offer once per start
+      try { const n = (await rawAll('inv')).length + (((await rawGet('kv', 'pins')) || { v: [] }).v || []).length; if (n) setTimeout(offer, 3500); } catch (e) {}
+    }
+  }
+  return { init, need, needAll, ask, locked, offer, mount, lockNow, isOn: () => !!cfg };
+})();
+
 /* ---------- data / backup ---------- */
 async function exportAll() {
+  if (!(await Pin.needAll())) return;   // a backup without the protected items would be incomplete
   await loadInv();
-  const kv = (await DB.all('kv')).filter(r => r.k !== 'map.packs' && r.k !== 'map.view');
+  const kv = (await DB.all('kv')).filter(r => r.k !== 'map.packs' && r.k !== 'map.view' && r.k !== 'pinCfg');
   const data = { app: 'blackout-handbook', version: 1, exported: new Date().toISOString(), kv, inv, photos: Object.entries(photos).map(([k, data]) => ({ k, data })) };
   const json = JSON.stringify(data), name = 'blackout-backup-' + new Date().toISOString().slice(0, 10) + '.json';
   const P = isNative() && window.Capacitor.Plugins;
@@ -829,10 +1024,12 @@ const gbOn = v => !!(v && typeof v === 'object' ? v.v : v);
 async function importAll(file, replace) {
   const d = JSON.parse(await file.text());
   if (d.app !== 'blackout-handbook') throw new Error('This is not a Blackout Handbook backup.');
+  if (!(await Pin.needAll())) throw new Error('Enter your PIN first: the backup is written into protected parts of the app.');
   if (replace) {
-    const keepPacks = await DB.get('kv', 'map.packs');
+    const keepPacks = await DB.get('kv', 'map.packs'), keepPin = await DB.get('kv', 'pinCfg');
     await DB.clear('inv'); await DB.clear('photos'); await DB.clear('kv');
-    for (const r of d.kv || []) if (r.k !== 'map.packs' && r.k !== 'map.view') await DB.put('kv', r);
+    if (keepPin) await DB.put('kv', keepPin);
+    for (const r of d.kv || []) if (r.k !== 'map.packs' && r.k !== 'map.view' && r.k !== 'pinCfg') await DB.put('kv', r);
     if (keepPacks) await DB.put('kv', keepPacks);
     for (const i of d.inv || []) await DB.put('inv', i);
     for (const p of d.photos || []) await DB.put('photos', p);
@@ -982,6 +1179,7 @@ async function vData() {
   const offline = installed || ('serviceWorker' in navigator && navigator.serviceWorker.controller);
   view.innerHTML = `<h1>Settings</h1>
   <h2>Appearance</h2><div id="lookbox">${lookInner(LK)}</div>
+  <h2>PIN lock</h2><div id="pinbox"></div>
   <h2>Back up and move your data</h2>
   <p>Your supplies, photos, stars and settings live only on this device. Save a backup file to the flash drive, then restore it on any other device.</p>
   <p class="dim">Last backup: ${last ? esc(last.slice(0, 16).replace('T', ' ')) : 'never'} · ${inv.length} items · ${usage}</p>
@@ -995,7 +1193,7 @@ async function vData() {
   <h2>Storage: what is loaded on this device</h2>
   <div id="stor"><p class="dim">Checking…</p></div>
   <h2>About</h2><p class="dim">Version 0.1. Library: ${LIB.items.length} guides in ${LIB.cats.length} topics.</p>`;
-  paintStorage();
+  paintStorage(); Pin.mount($('#pinbox'));
   $('#exp').onclick = async () => { await exportAll(); vData(); };
   const run = async rep => { const f = $('#imp').files[0]; if (!f) return alert('Choose a backup file first.'); if (rep && !confirm('This erases what is on this device first. Continue?')) return; try { alert(await importAll(f, rep)); vData(); } catch (e) { alert(e.message); } };
   $('#impm').onclick = () => run(false); $('#impr').onclick = () => run(true);
@@ -1017,6 +1215,8 @@ function route() {
   if (p[0] !== 'ask') { document.body.classList.remove('ask'); $('#composer').hidden = true; }
   Tasks.clearBlip({ ask: 'ask', meds: 'meds', ency: 'meds', map: 'map', inventory: 'inventory', phrases: 'phrases', data: 'data' }[p[0]] || 'home');
   if (window.BHMap && p[0] !== 'map') { window.BHMap.leave(); view.className = ''; }
+  const gate = { inventory: 'inv', gobag: 'inv', notes: 'notes', people: 'people' }[p[0]];
+  if (gate && Pin.locked(gate)) { Pin.need(gate).then(ok => { if (ok) route(); else if (location.hash !== '#/') location.hash = '#/'; else vHome(); }); return; }
   if (!p.length) vHome();
   else if (p[0] === 'cat') vCat(p[1]);
   else if (p[0] === 'e') vEntry(p[1]);
@@ -1026,7 +1226,7 @@ function route() {
   else if (p[0] === 'notes') vNotes();
   else if (p[0] === 'people') { vPeople().then(async () => { if (p[1]) personForm(await kvGet('people', []), p[1]); }); }
   else if (p[0] === 'phrases') vPhrases();
-  else if (p[0] === 'ask') vAsk();
+  else if (p[0] === 'ask') { if (Pin.locked('chats')) Pin.need('chats').then(() => vAsk()); else vAsk(); }
   else if (p[0] === 'data') vData();
   else if (p[0] === 'meds') window.BHMeds.open(view, p.slice(1));
   else if (p[0] === 'ency') window.BHEncy.open(view, p.slice(1));
@@ -1042,9 +1242,10 @@ $('#quickBtn').onclick = () => { location.hash = '#/e/quick-sheet'; };
 $('#searchForm').onsubmit = e => { e.preventDefault(); const q = $('#q').value.trim(); if (q) location.hash = '#/search/' + encodeURIComponent(q); $('#q').blur(); };
 window.addEventListener('hashchange', route);
 
-window.BHAPP = { DB, kvGet, kvSet, esc, tomb, uid, setTab, isNative };
+window.BHAPP = { DB, kvGet, kvSet, esc, tomb, uid, setTab, isNative, pinNeed: sc => Pin.need(sc), pinLocked: sc => Pin.locked(sc), pinOffer: () => Pin.offer() };
 (async function init() {
   await DB.open();
+  await Pin.init();
   favs = await kvGet('favs', []);
   await applyPrefs();
   route();

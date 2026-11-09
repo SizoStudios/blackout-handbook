@@ -537,7 +537,11 @@ function showSpot(lon, lat) {
   openSheet(`<button class="x" id="cx">×</button><h3>${P.coord === 'dms' ? fmtCoord(lat, lon) : 'This spot'}</h3>${infoLines({ lon, lat })}${cardActions({ lon, lat }, '<button class="pri" id="cPin">Add my pin here</button>')}`);
   wireCard({ lon, lat }); $('#cPin').onclick = () => pinForm({ lon, lat, title: '', types: ['note'] });
 }
-async function savePins() { await kvSet('pins', M.pins); }
+async function savePins() {
+  if (M.lock) { toast('Locations are locked. Leave the map and open it again to enter your PIN.'); throw new Error('locked'); }
+  await kvSet('pins', M.pins);
+  if (A.pinOffer) A.pinOffer();   // first location saved: offer a PIN
+}
 function pinForm(pin, viewing) {
   const isNew = !pin.id, p = Object.assign({ status: 'unchecked', checked: new Date().toISOString().slice(0, 10), note: '', tags: [], vis: 'private' }, pin);
   const age = p.checked ? Math.floor((Date.now() - new Date(p.checked).getTime()) / 864e5) : null;
@@ -723,7 +727,8 @@ function noPacksHtml() {
 async function open(view, sub) {
   A.setTab('map'); document.body.classList.add('mapmode'); view.className = 'mapv';
   P = Object.assign({}, DEF, await kvGet('map.prefs', null) || {}); const had = await kvGet('map.prefs', null); firstRun = !had; P.layers = P.layers || {};
-  M.pins = await kvGet('pins', []);
+  M.lock = false; if (A.pinLocked && A.pinLocked('pins')) M.lock = !(await A.pinNeed('pins'));
+  M.pins = M.lock ? [] : await kvGet('pins', []);
   const ok = await boot();
   if (!DB.db) { view.innerHTML = '<div class="mp-empty"><h2>Map</h2><p class="warn">This device would not let the app save data, so map packs cannot be stored here.</p></div>'; return; }
   if (!ok) { view.innerHTML = noPacksHtml(); $('#packIn').onchange = async e => { await addPacks(e.target.files); if (M.base) open(view, sub); }; refreshPackList(); $('#packList').onclick = async e => { const b = e.target.dataset && e.target.dataset.rm; if (b) { await removePack(b); refreshPackList(); } }; return; }
