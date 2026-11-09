@@ -1,5 +1,5 @@
-const V = 'bh-v22'; // bump on every release so installed copies refresh
-const FILES = ['./', 'style.css', 'app.js', 'map.js', 'route.js', 'meds.js', 'medical/medicines.js', 'medical/conditions.js', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png',
+const V = 'bh-v23'; // bump on every release so installed copies refresh
+const FILES = ['./', 'style.css', 'app.js', 'map.js', 'route.js', 'meds.js', 'ency.js', 'medical/medicines.js', 'medical/conditions.js', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png',
   'content/00-core.js', 'content/01-security.js', 'content/02-water-air.js', 'content/03-food-shelter.js', 'content/04-health.js',
   'content/05-tech.js', 'content/06-chem-storage.js', 'content/07-nature.js', 'content/08-weapons-ordnance.js', 'content/09-community.js', 'content/10-more.js', 'content/phrases.js'];
 

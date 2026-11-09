@@ -30,7 +30,8 @@
     const named = d.meds.filter(m => !m.class_ && m.name.length > 3 && new RegExp('\\b' + m.name.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+') + '\\b').test(ql)).slice(0, 3);
     // guideline extracts: score by title words (x4) and text words
     const sc = d.conds.map(c => { let s = 0; for (const w of ws) { if (c._t.includes(w)) s += 4; else if (c._s.includes(w)) s += 1; } return [s, c]; }).filter(x => x[0] >= 5).sort((a, b) => b[0] - a[0]).slice(0, 2).map(x => x[1]);
-    if (!named.length && !sc.length) return null;
+    const enc = window.BHEncy ? await window.BHEncy.context(q) : null;
+    if (!named.length && !sc.length && !enc) return null;
     const parts = [];
     for (const m of named) {
       const doses = (m.doses || []).slice(0, 8).map(x => `- ${x.aud ? x.aud + ': ' : ''}${x.line} [${x.cond}, ${LVSHORT[x.src]} guideline ${x.ref}]`).join('\n');
@@ -38,13 +39,14 @@
       parts.push(`MEDICINE: ${m.name}${m.aka && m.aka.length ? ' (' + m.aka.join(', ') + ')' : ''}. Used for: ${(m.uses || []).slice(0, 6).map(u => u.cond).join('; ') || 'not stated'}.\n${doses || 'No dose line in the guidelines.'}${sch ? '\nSchedule: ' + sch : ''}${m.enc ? '\nAbout: ' + m.enc.lead.slice(0, 260) : ''}`);
     }
     for (const c of sc) parts.push(`GUIDELINE EXTRACT (${LVSHORT[c.src]} STG ${c.ref} ${c.title}):\n${c.text.replace(/\s+/g, ' ').slice(0, 1100)}`);
-    return { text: parts.join('\n\n').slice(0, 3200), meds: named.map(m => m.name), conds: sc.map(c => c.title), links: [...named.map(m => ({ href: '#/meds/' + m.id, label: m.name })), ...sc.map(c => ({ href: '#/meds/c/' + c.id, label: c.title }))] };
+    if (enc) parts.push(enc.text);
+    return { text: parts.join('\n\n').slice(0, 4200), meds: named.map(m => m.name), conds: sc.map(c => c.title), links: [...named.map(m => ({ href: '#/meds/' + m.id, label: m.name })), ...sc.map(c => ({ href: '#/meds/c/' + c.id, label: c.title })), ...(enc ? enc.links : [])] };
   }
 
   /* ----- screens ----- */
   function head(sub) {
     return `<h1>Medicines and conditions</h1>
-    <div class="row"><a class="${sub === 'c' ? '' : 'pri'}" href="#/meds" style="padding:8px 14px;border-radius:10px;border:1px solid var(--line)">Medicines</a><a class="${sub === 'c' ? 'pri' : ''}" href="#/meds/c" style="padding:8px 14px;border-radius:10px;border:1px solid var(--line)">Conditions (guidelines)</a></div>`;
+    <div class="row"><a class="${sub === 'c' ? '' : 'pri'}" href="#/meds" style="padding:8px 14px;border-radius:10px;border:1px solid var(--line)">Medicines</a><a class="${sub === 'c' ? 'pri' : ''}" href="#/meds/c" style="padding:8px 14px;border-radius:10px;border:1px solid var(--line)">Conditions (guidelines)</a><a href="#/ency" style="padding:8px 14px;border-radius:10px;border:1px solid var(--line)">Encyclopedia</a></div>`;
   }
   const chips = m => [...(m.levels || []).map(l => `<span class="dim">${esc(LVSHORT[l.src] || l.src)}</span>`), ...(m.schedule && m.schedule.length ? [`<span class="dim">S${[...new Set(m.schedule.map(s => s.s))].join('/S')}</span>`] : [])].join(' · ');
 

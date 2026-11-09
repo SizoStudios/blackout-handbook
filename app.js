@@ -568,7 +568,7 @@ async function runAI(q, hits, mode, ctx, done, follow, photo, meta) {
     return;
   }
   const own = mode !== 'grounded', isPhoto = mode === 'photo' && !!photo && photo.length > 0;
-  out.innerHTML = `<div class="${own ? 'warn' : 'note'}" id="aitag">${AI_TAG[mode]}${meta && meta.med ? ' Official South African medicine extracts were given to the AI; anything outside them is the AI\u2019s own opinion and is labelled.' : ''}</div>
+  out.innerHTML = `<div class="${own ? 'warn' : 'note'}" id="aitag">${AI_TAG[mode]}${meta && meta.med ? ' Medical extracts (South African guidelines and a general encyclopedia) were given to the AI; anything outside them is the AI\u2019s own opinion and is labelled.' : ''}</div>
     <div class="think" id="aithink"><div class="steps"><span data-s="1" class="on">1 Loading</span><span data-s="2">2 Reading</span><span data-s="3">3 Writing</span></div><div class="bar"><i></i></div><p class="dim" id="aiwait"></p></div>
     <div class="msg" id="aitext" hidden></div><div class="row"><button id="aistop">Stop</button></div><p class="dim" id="aifoot"></p><div id="aifollow"></div>`;
   const txt = $('#aitext'), wait = $('#aiwait');
@@ -600,7 +600,7 @@ async function runAI(q, hits, mode, ctx, done, follow, photo, meta) {
       : `${ctx}QUESTION: ${q}`;
     const med = meta && meta.med;
     const fullPrompt = med ? prompt.replace(/QUESTION(?: ABOUT[^:]*)?:/, m => 'SOUTH AFRICAN MEDICAL SOURCES (official guideline and medicine extracts):\n' + med.text + '\n\n' + m) : prompt;
-    const medRule = med ? ' MEDICAL SOURCES: the message contains official South African medicine and guideline extracts. When you give a dose or a medical fact that is in them, quote it and name the source (for example "PHC guideline 4.7"). If something the person needs is NOT in the extracts, do not hold back: give your best opinion, but begin that part with "My own opinion (not from the sources):" and say how sure you are.' : '';
+    const medRule = med ? ' MEDICAL SOURCES: the message contains official South African medicine and guideline extracts, and sometimes general encyclopedia extracts. Prefer the South African extracts. When you give a dose or a medical fact that is in them, quote it and name the source (for example "PHC guideline 4.7"); if you use an encyclopedia extract, say "from the encyclopedia (general, not South African)". If something the person needs is NOT in the extracts, do not hold back: give your best opinion, but begin that part with "My own opinion (not from the sources):" and say how sure you are.' : '';
     onScores = await scoresOn();
     const sInstr = scoreInstr(onScores, mode), sExtra = sInstr ? 40 : 0;
     const r = await L.generate({ system: (await withExtra(isPhoto ? AI_SYSTEM_PHOTO : own ? AI_SYSTEM_OWN : AI_SYSTEM)) + sInstr + medRule, prompt: fullPrompt, maxTokens: (isPhoto ? 340 : own ? 260 : 240) + sExtra + (med ? 80 : 0), images: isPhoto ? photo : [] });
@@ -813,6 +813,7 @@ function route() {
   else if (p[0] === 'ask') vAsk();
   else if (p[0] === 'data') vData();
   else if (p[0] === 'meds') window.BHMeds.open(view, p.slice(1));
+  else if (p[0] === 'ency') window.BHEncy.open(view, p.slice(1));
   else if (p[0] === 'map') window.BHMap.open(view, p.slice(1));
   else vHome();
   if (p[0] !== 'e') window.scrollTo(0, 0);

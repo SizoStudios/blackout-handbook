@@ -104,7 +104,7 @@ async function removePack(id) {
   const meta = M.packs.find(p => p.id === id); if (!meta) return;
   const keys = await new Promise(res => { const out = [], t = DB.db.transaction('mapdata', 'readonly'), r = t.objectStore('mapdata').openKeyCursor(); r.onsuccess = () => { const c = r.result; if (c) { out.push(c.key); c.continue(); } }; t.oncomplete = () => res(out); });
   const pref = meta.pack === 'roads' ? 'r/' + meta.region + '/' : meta.pack === 'base' ? null : null;
-  const kill = meta.pack === 'imagery' ? keys.filter(k => k.startsWith('i/' + meta.region + '/')) : meta.pack === 'routing' ? keys.filter(k => k.startsWith('g/')) : meta.pack === 'base' ? keys.filter(k => k === 'base' || k === 'places' || k.startsWith('t/')) : meta.pack === 'roads-ov' ? keys.filter(k => k === 'ov') : keys.filter(k => k.startsWith(pref));
+  const kill = meta.pack === 'ency' ? keys.filter(k => k.startsWith('e/')) : meta.pack === 'imagery' ? keys.filter(k => k.startsWith('i/' + meta.region + '/')) : meta.pack === 'routing' ? keys.filter(k => k.startsWith('g/')) : meta.pack === 'base' ? keys.filter(k => k === 'base' || k === 'places' || k.startsWith('t/')) : meta.pack === 'roads-ov' ? keys.filter(k => k === 'ov') : keys.filter(k => k.startsWith(pref));
   for (let i = 0; i < kill.length; i += 500) await new Promise(res => { const t = DB.db.transaction('mapdata', 'readwrite'), s = t.objectStore('mapdata'); kill.slice(i, i + 500).forEach(k => s.delete(k)); t.oncomplete = res; });
   await kvSet('map.packs', M.packs.filter(p => p.id !== id));
   M.cells.clear(); M.pending.clear(); M.base = null; M.places = null; M.terrain = false; await loadPacks();
@@ -594,6 +594,7 @@ const PHOTOS = [
   ['imagery:durban', 'Photos-Durban-Pietermaritzburg.bhmap', 'Photos: Durban, Pietermaritzburg and the coast', 38],
   ['imagery:ec1', 'Photos-EastLondon-Pilot.bhmap', 'Photos: East London, Qonce and the coast to Hamburg', 25]
 ];
+const REFS = [['ency:med', 'Encyclopedia-Medical.bhmap', 'Medical encyclopedia (conditions, first aid, injuries, medicines)', 70]];
 const COVERED_BY = { 'imagery:capepen': 'imagery:cape' };   // the Cape Region photos already include the Peninsula
 async function peekPack(file) {
   try {
@@ -605,7 +606,7 @@ async function peekPack(file) {
 async function checkPacks() {
   const keys = await new Promise(res => { const out = []; try { const t = DB.db.transaction('mapdata', 'readonly'), r = t.objectStore('mapdata').openKeyCursor(); r.onsuccess = () => { const c = r.result; if (c) { out.push(c.key); c.continue(); } }; t.oncomplete = () => res(out); t.onerror = () => res(out); } catch (e) { res(out); } });
   const have = {}; const add = id => have[id] = (have[id] || 0) + 1;
-  for (const k of keys) { if (k === 'base' || k === 'places' || k.startsWith('t/')) add('base:all'); else if (k === 'ov') add('roads-ov:all'); else if (k.startsWith('g/')) add('routing:all'); else if (k.startsWith('r/')) add('roads:' + k.split('/')[1]); else if (k.startsWith('i/')) add('imagery:' + k.split('/')[1]); }
+  for (const k of keys) { if (k === 'base' || k === 'places' || k.startsWith('t/')) add('base:all'); else if (k === 'ov') add('roads-ov:all'); else if (k.startsWith('g/')) add('routing:all'); else if (k.startsWith('r/')) add('roads:' + k.split('/')[1]); else if (k.startsWith('i/')) add('imagery:' + k.split('/')[1]); else if (k.startsWith('e/')) add('ency:med'); }
   return have;
 }
 async function refreshPackList() {
@@ -629,8 +630,13 @@ async function refreshPackList() {
     const mark = cls === 'ok' ? '✓' : cls === 'bad' ? '✗' : '○';
     return '<div class="row"><b class="' + cls + '" style="width:1.3em">' + mark + '</b><span class="grow"><b>' + esc(name) + '</b><br><span class="dim">' + esc(file) + ' · about ' + mb + ' MB · <span class="' + cls + '">' + st + '</span></span></span>' + (p && n >= p.entries ? '<button data-sat="' + esc(id) + '">Show on map</button>' : '') + (p ? '<button class="dng" data-rm="' + esc(id) + '">Remove</button>' : '') + '</div>';
   });
-  const extra = M.packs.filter(p => !KNOWN.some(k => k[0] === p.id) && !PHOTOS.some(k => k[0] === p.id)).map(p => '<div class="row"><b class="ok" style="width:1.3em">✓</b><span class="grow"><b>' + esc(p.name) + '</b><br><span class="dim">' + p.mb + ' MB' + (p.pack === 'imagery' ? ' · satellite photos. Show them on the map with the button, then zoom in.' : '') + '</span></span>' + (p.pack === 'imagery' ? '<button data-sat="' + esc(p.id) + '">Show on map</button>' : '') + '<button class="dng" data-rm="' + esc(p.id) + '">Remove</button></div>').join('');
-  box.innerHTML = '<p><b>' + ok + ' of ' + KNOWN.length + ' map packs added.</b>' + (missing.length ? ' <span class="dim">Still to add: ' + esc(missing.join(', ')) + '</span>' : ' Everything is in.') + '</p>' + rows.join('') + '<p style="margin-top:14px"><b>Satellite photos</b> <span class="dim">(optional: add only the areas you want)</span></p>' + photoRows.join('') + extra;
+  const refRows = REFS.map(([id, file, name, mb]) => {
+    const p = byId[id], n = have[id] || 0; let st, cls;
+    if (p && n >= p.entries) { st = 'Added'; cls = 'ok'; } else if (p || n) { st = 'Incomplete' + (p ? ' (' + n + ' of ' + p.entries + ' parts)' : '') + '. Add this file again.'; cls = 'bad'; } else { st = 'Not added yet (optional). Add it here, or from Meds > Encyclopedia'; cls = 'soon'; }
+    return '<div class="row"><b class="' + cls + '" style="width:1.3em">' + (cls === 'ok' ? '\u2713' : cls === 'bad' ? '\u2717' : '\u25cb') + '</b><span class="grow"><b>' + esc(name) + '</b><br><span class="dim">' + esc(file) + ' \u00b7 about ' + mb + ' MB \u00b7 <span class="' + cls + '">' + st + '</span></span></span>' + (p ? '<button class="dng" data-rm="' + esc(id) + '">Remove</button>' : '') + '</div>';
+  });
+  const extra = M.packs.filter(p => !KNOWN.some(k => k[0] === p.id) && !PHOTOS.some(k => k[0] === p.id) && !REFS.some(k => k[0] === p.id)).map(p => '<div class="row"><b class="ok" style="width:1.3em">✓</b><span class="grow"><b>' + esc(p.name) + '</b><br><span class="dim">' + p.mb + ' MB' + (p.pack === 'imagery' ? ' · satellite photos. Show them on the map with the button, then zoom in.' : '') + '</span></span>' + (p.pack === 'imagery' ? '<button data-sat="' + esc(p.id) + '">Show on map</button>' : '') + '<button class="dng" data-rm="' + esc(p.id) + '">Remove</button></div>').join('');
+  box.innerHTML = '<p><b>' + ok + ' of ' + KNOWN.length + ' map packs added.</b>' + (missing.length ? ' <span class="dim">Still to add: ' + esc(missing.join(', ')) + '</span>' : ' Everything is in.') + '</p>' + rows.join('') + '<p style="margin-top:14px"><b>Satellite photos</b> <span class="dim">(optional: add only the areas you want)</span></p>' + photoRows.join('') + '<p style="margin-top:14px"><b>Reference packs</b> <span class="dim">(optional)</span></p>' + refRows.join('') + extra;
 }
 async function addPacks(files) {
   const bar = $('#packBar'), msg = $('#packMsg'), log = $('#packLog'), res = []; if (bar) bar.hidden = false;
@@ -723,5 +729,5 @@ async function open(view, sub) {
 }
 function onResize() { if (!M.root || !document.body.contains(M.root)) return window.removeEventListener('resize', onResize); setSize(); draw(); }
 function leave() { document.body.classList.remove('mapmode'); clearTimeout(M.mTimer); if (P && P.gpsStopLeave && M.gpsOn) gpsStop(true); }
-window.BHMap = { listPacks: async () => { await loadPacks(); return M.packs; }, removePackById: id => removePack(id), open, leave, M, mx, my, unx, uny, hav, kmPerPx, getRec, elevAt, flyTo, draw, openSheet, closeSheet, fmtKm, fmtM, fmtH, fmtCoord, toast, get P() { return P; }, V: () => V };
+window.BHMap = { importPack, listPacks: async () => { await loadPacks(); return M.packs; }, removePackById: id => removePack(id), open, leave, M, mx, my, unx, uny, hav, kmPerPx, getRec, elevAt, flyTo, draw, openSheet, closeSheet, fmtKm, fmtM, fmtH, fmtCoord, toast, get P() { return P; }, V: () => V };
 })();
