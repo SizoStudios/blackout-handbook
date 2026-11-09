@@ -418,19 +418,21 @@ const Tasks = (() => {
   const map = new Map(); let seq = 0, open = false; const subs = new Set();
   // The "orb": a soft colour blob that keeps changing shape while something is happening. pct = null means "working, no percentage".
   // Three dots that hop over one another, all in step. still = paused or finished.
-  const orb = (pct, mini, still) => `<span class="dots${mini ? ' mini' : ''}${still ? ' still' : ''}"><i></i><i></i><i></i></span>`;
+  const orb = (pct, mini, still) => `<span class="viz${mini ? ' mini' : ''}${still ? ' still' : ''}" data-t="${(window.__viz && window.__viz.type) || 'hop'}">${[0, 1, 2, 3, 4].map(n => `<i style="--n:${n}"></i>`).join('')}</span>`;
+  const curTab = () => { const a = document.querySelector('#tabs a.on'); return a ? a.dataset.t : ''; };
   const stateText = t => t.state === 'done' ? 'Finished' : t.state === 'error' ? 'Problem: ' + (t.msg || '') : t.state === 'cancelled' ? 'Cancelled' : t.paused ? 'Paused' + (t.pct != null ? ' at ' + t.pct + '%' : '') : (t.pct == null ? (t.note || 'Working…') : t.pct + '%' + (t.note ? ' · ' + t.note : ''));
   const btns = t => t.state !== 'running' ? '' : `<span class="tbtn">${t.canPause ? `<button data-act="${t.paused ? 'resume' : 'pause'}" data-id="${t.id}">${t.paused ? 'Resume' : 'Pause'}</button>` : ''}${t.canCancel ? `<button class="dng" data-act="cancel" data-id="${t.id}">${t.kind === 'answer' ? 'Stop' : 'Cancel'}</button>` : ''}</span>`;
   const emit = () => { paintPill(); subs.forEach(f => { try { f(); } catch (e) {} }); };
   function paintPill() {
     const pill = $('#taskPill'), panel = $('#taskPanel'); if (!pill) return;
-    const list = [...map.values()], live = list.filter(t => t.state === 'running');
+    // not shown while you are on the very screen where the task is happening (for example the chat)
+    const cur = curTab(), list = [...map.values()].filter(t => t.home !== cur), live = list.filter(t => t.state === 'running');
     pill.hidden = !list.length;
     if (list.length) { const t = live[0] || list[list.length - 1]; pill.innerHTML = orb(null, true, t.state !== 'running' || t.paused) + `<span>${live.length > 1 ? live.length + ' tasks' : esc(t.state === 'running' ? (t.short || t.label) + (t.pct != null ? ' ' + t.pct + '%' : '') : stateText(t))}</span>`; pill.classList.toggle('paused', !!(live[0] && live[0].paused)); }
     else { panel.hidden = true; open = false; }
     if (open) panel.innerHTML = list.map(t => `<div class="trow">${orb(null, true, t.state !== 'running' || t.paused)}<div class="grow"><b>${esc(t.label)}</b><div class="dim">${esc(stateText(t))}</div>${t.state === 'running' && t.pct != null ? `<div class="pbar"><i style="width:${t.pct}%"></i></div>` : ''}</div>${btns(t)}</div>`).join('') || '<div class="dim" style="padding:8px">Nothing is running.</div>';
   }
-  function start(o) { const t = Object.assign({ id: ++seq, kind: 'task', label: '', short: '', pct: null, note: '', state: 'running', paused: false, cancelled: false, canPause: false, canCancel: true, tab: '', onCancel: null, msg: '' }, o); map.set(t.id, t); emit(); return t; }
+  function start(o) { const t = Object.assign({ id: ++seq, home: curTab(), kind: 'task', label: '', short: '', pct: null, note: '', state: 'running', paused: false, cancelled: false, canPause: false, canCancel: true, tab: '', onCancel: null, msg: '' }, o); map.set(t.id, t); emit(); return t; }
   function update(t, patch) { Object.assign(t, patch); emit(); }
   function end(t, o = {}) {
     t.state = o.error ? 'error' : o.cancelled ? 'cancelled' : 'done'; t.msg = o.msg || ''; t.paused = false; if (!o.error && !o.cancelled) t.pct = t.pct == null ? null : 100; emit();
@@ -455,7 +457,7 @@ const Tasks = (() => {
     pill.onclick = () => { open = !open; panel.hidden = !open; paintPill(); };
     panel.onclick = e => { const b = e.target.closest('[data-act]'); if (b) act(map.get(+b.dataset.id), b.dataset.act); };
   }
-  return { start, update, end, mount, act, orb, blip, clearBlip, init, get: id => map.get(id) };
+  return { start, update, end, mount, act, orb, blip, clearBlip, init, refresh: paintPill, get: id => map.get(id) };
 })();
 function appToast(msg) {
   let t = $('#toast'); if (!t) { t = document.createElement('div'); t.id = 'toast'; t.onclick = () => t.classList.remove('show'); document.body.appendChild(t); }
@@ -465,7 +467,15 @@ window.BHTasks = Tasks; window.BHToast = appToast;
 
 /* ---------- Ask: a conversation, newest at the bottom, the box to type in stays at the bottom ---------- */
 const ASK = { turns: [], thread: null, photos: [], seq: 0, stick: true };
-window.addEventListener('scroll', () => { ASK.stick = (document.documentElement.scrollHeight - window.innerHeight - window.scrollY) < 260; }, { passive: true });
+// Keeps the newest text in view just above the typing box. Scrolling up by hand pauses it; scrolling back down (or asking again) resumes it.
+ASK.follow = true; ASK.last = null; ASK.prog = 0;
+const composerTop = () => { const c = document.querySelector('#composer'); return c && !c.hidden ? c.getBoundingClientRect().top : window.innerHeight; };
+function followEl(el) {
+  if (!el || !el.isConnected || !ASK.follow) return;
+  const over = el.getBoundingClientRect().bottom - (composerTop() - 16);
+  if (over > 1) { ASK.prog = Date.now(); window.scrollBy(0, over); }
+}
+window.addEventListener('scroll', () => { if (Date.now() - ASK.prog < 150 || !ASK.last || !ASK.last.isConnected) return; ASK.follow = ASK.last.getBoundingClientRect().bottom - (composerTop() - 16) < 100; }, { passive: true });
 const SMALLTALK = [
   [/^(hi|hello|hey|hiya|howzit|heita|sawubona|molo|dumela|goeie\s?(more|middag|naand)|good\s(morning|afternoon|evening|day)|greetings|yo|sup)[\s!.,?]*$/i, ['Hi! What do you need help with?', 'Hello. Ask me anything: a guide, a medicine, a plant, or add a photo.']],
   [/^(how are you|how's it going|how are things|how r u)[\s!.?]*$/i, ['I am ready to help. What is going on?']],
@@ -480,7 +490,7 @@ function addTurn(q, pic) {
   const rec = { id: ++ASK.seq, q, a: '', done: false };
   const root = document.createElement('section'); root.className = 'turn';
   root.innerHTML = `<div class="bub me">${pic.map(u => `<img src="${u}" class="tph" alt="">`).join('')}${pic.length ? '<br>' : ''}${esc(q || PHOTO_Q)}</div><div class="bub ai"><div class="aiout"></div><div class="gbox"></div></div>`;
-  th.appendChild(root); ASK.turns.push(rec); ASK.stick = true; if (th.isConnected) window.scrollTo(0, document.documentElement.scrollHeight);
+  th.appendChild(root); ASK.turns.push(rec); ASK.follow = true; ASK.last = root.querySelector('.aiout'); setTimeout(() => followEl(ASK.last), 0);
   return { rec, root, out: root.querySelector('.aiout'), gbox: root.querySelector('.gbox') };
 }
 // The last few finished turns of this conversation, so follow-ups such as "name some brands" make sense.
@@ -548,6 +558,7 @@ async function vAsk() {
     const gpref = await kvGet('askGuides', null), gopen = gpref === null ? !canAI : !!gpref;
     const support = !forAI.length ? 0 : mode === 'grounded' ? Math.round(70 + 30 * Math.min(1, (top.s - STRONG_MATCH) / 30)) : Math.round(10 + 40 * Math.min(1, top.s / STRONG_MATCH));
     turn.gbox.innerHTML = hits.length ? `<details class="gd"${gopen ? ' open' : ''}><summary>Matching guides (${hits.length}) <span class="dim">tap to ${gopen ? 'hide' : 'show'}</span></summary>${hits.map(i => itemCard(i, `<div class="snip">${snippet(i, sq)}</div>`)).join('')}</details>` : (pic.length ? '' : '<div class="dim">No guide matched. Try different words.</div>');
+    followEl(turn.out);
     const gd = turn.gbox.querySelector('details'); if (gd) gd.querySelector('summary').onclick = () => setTimeout(() => { kvSet('askGuides', gd.open); const h = gd.querySelector('summary .dim'); if (h) h.textContent = 'tap to ' + (gd.open ? 'hide' : 'show'); }, 0);
     // one answer at a time: a question asked while the AI is busy waits its turn
     const go = async () => {
@@ -673,7 +684,7 @@ async function runAI(out, q, hits, mode, ctx, done, photo, meta, rec) {
     <div class="aitext" hidden></div><p class="dim aifoot"></p><div class="aiafter"></div>`;
   const $o = s => out.querySelector(s), txt = $o('.aitext'), wait = $o('.aiwait'), stage = $o('.aistage');
   const live = () => out.isConnected && ASK.thread && ASK.thread.isConnected;
-  const keep = () => { if (live() && ASK.stick) window.scrollTo(0, document.documentElement.scrollHeight); };
+  const keep = () => { if (live()) followEl(out); };
   const setStage = s => { if (stage) stage.textContent = s; };
   let onScores = [];
   let tok = null, stopped = false, got = false, phase = isPhoto ? 'Preparing' : 'Loading', shown = '', looped = false;
@@ -881,15 +892,60 @@ async function paintStorage() {
     if (b.id === 'aiRm') { if (!confirm('Delete the AI pack from this phone? You can install it again later.')) return; await L.deleteModel(); return paintStorage(); }
   };
 }
+/* ---------- Appearance: themes, accent colours, text size, spacing, busy animation ---------- */
+const THEMES = { dark: ['Dark', '#07090c', '#10141a'], midnight: ['Midnight', '#070b16', '#0e1527'], forest: ['Forest', '#060b08', '#0d1712'], amoled: ['Black', '#000000', '#0a0a0a'], light: ['Light', '#f6f5f1', '#ffffff'], sand: ['Sand', '#f4eee2', '#fffdf8'] };
+const LIGHT_THEMES = new Set(['light', 'sand']);
+const ACCENTS = { amber: ['Amber', '#f0b429', '#a86a00'], coral: ['Coral', '#ff7a6b', '#c0392b'], teal: ['Teal', '#2dd4bf', '#0f766e'], sky: ['Sky', '#4da3ff', '#1d5fbf'], violet: ['Violet', '#a98bff', '#6d3fd6'], green: ['Green', '#4cc38a', '#1d7f55'], rose: ['Rose', '#ff6fa5', '#c2185b'] };
+const SIZES = { s: ['Small', 15], m: ['Medium', 16], l: ['Large', 18], xl: ['Extra large', 20] };
+const DENS = { compact: ['Compact', 34, 10], normal: ['Normal', 38, 12], roomy: ['Roomy', 44, 16] };
+const VIZ_TYPES = { hop: 'Hopping dots', wave: 'Wave', pulse: 'Pulse', bars: 'Bars', sweep: 'Sweep' };
+const VIZ_PALS = { sunset: ['Sunset', ['#f0b429', '#ff7a6b', '#a98bff']], ocean: ['Ocean', ['#4da3ff', '#2dd4bf', '#7dd3fc']], forest: ['Forest', ['#4cc38a', '#a3e635', '#2dd4bf']], rose: ['Rose', ['#ff6fa5', '#ff9a8a', '#c18bff']], accent: ['Match accent', null] };
+const VIZ_SIZES = { tiny: ['Tiny', 5], small: ['Small', 6.5], medium: ['Medium', 8], large: ['Large', 11] };
+const LOOK_DEF = { theme: 'dark', acc: 'amber', size: 'm', dens: 'normal', viz: 'hop', pal: 'sunset', vsz: 'small' };
+const hexAlpha = (h, a) => { const n = parseInt(h.slice(1), 16); return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`; };
+function applyLook(look) {
+  const L = Object.assign({}, LOOK_DEF, look || {}), r = document.documentElement, st = r.style;
+  r.dataset.theme = THEMES[L.theme] ? L.theme : 'dark'; const light = LIGHT_THEMES.has(r.dataset.theme);
+  const a = ACCENTS[L.acc] || ACCENTS.amber, acc = light ? a[2] : a[1];
+  st.setProperty('--acc', acc); st.setProperty('--accfg', light ? '#ffffff' : '#111111');
+  st.setProperty('--fs', (SIZES[L.size] || SIZES.m)[1] + 'px');
+  const d = DENS[L.dens] || DENS.normal; st.setProperty('--ctl', d[1] + 'px'); st.setProperty('--pad', d[2] + 'px');
+  const pal = (VIZ_PALS[L.pal] || VIZ_PALS.sunset)[1] || [acc, hexAlpha(acc, .7), hexAlpha(acc, .45)];
+  st.setProperty('--c1', pal[0]); st.setProperty('--c2', pal[1]); st.setProperty('--c3', pal[2]);
+  st.setProperty('--vs', String((VIZ_SIZES[L.vsz] || VIZ_SIZES.small)[1]));
+  window.__viz = { type: VIZ_TYPES[L.viz] ? L.viz : 'hop' };
+  const m = document.querySelector('meta[name=theme-color]'); if (m) m.content = getComputedStyle(r).getPropertyValue('--bg').trim() || '#000000';
+  try { localStorage.setItem('bh_look', JSON.stringify(L)); } catch (e) {}
+  return L;
+}
+async function getLook() {
+  let l = await kvGet('look', null);
+  if (!l) { const th = await kvGet('theme', 'dark'), big = await kvGet('big', false); l = { theme: th === 'light' ? 'light' : 'dark', size: big ? 'xl' : 'm' }; }   // settings from before 3.12
+  return Object.assign({}, LOOK_DEF, l);
+}
+async function setLook(patch) { const l = Object.assign(await getLook(), patch); await kvSet('look', l); applyLook(l); return l; }
+function lookInner(L) {
+  const seg = (key, map, cur) => `<div class="seg">${Object.entries(map).map(([k, v]) => `<button class="${cur === k ? 'on' : ''}" data-k="${key}" data-v="${k}">${esc(Array.isArray(v) ? v[0] : v)}</button>`).join('')}</div>`;
+  return `<label>Theme</label><div class="swrow">${Object.entries(THEMES).map(([k, [n, c1, c2]]) => `<button class="sw${L.theme === k ? ' on' : ''}" data-k="theme" data-v="${k}"><span class="swc" style="background:linear-gradient(135deg,${c1} 50%,${c2} 50%)"></span>${esc(n)}</button>`).join('')}</div>
+    <label>Accent colour</label><div class="swrow">${Object.entries(ACCENTS).map(([k, [n, c1]]) => `<button class="sw dot${L.acc === k ? ' on' : ''}" data-k="acc" data-v="${k}" aria-label="${esc(n)}" title="${esc(n)}"><span class="swc" style="background:${c1}"></span></button>`).join('')}</div>
+    <label>Text size</label>${seg('size', SIZES, L.size)}
+    <label>Buttons and spacing</label>${seg('dens', DENS, L.dens)}
+    <label>Busy animation</label>${seg('viz', VIZ_TYPES, L.viz)}
+    <label>Busy animation colours</label>${seg('pal', VIZ_PALS, L.pal)}
+    <label>Busy animation size</label>${seg('vsz', VIZ_SIZES, L.vsz)}
+    <div class="vzprev">${Tasks.orb(null, false)}<span class="dim">This is how the busy animation looks</span></div>`;
+}
+
 let deferredInstall = null;
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredInstall = e; });
 async function vData() {
   setTab('data'); await loadInv();
-  const last = await kvGet('lastBackup', null), theme = await kvGet('theme', 'dark'), big = await kvGet('big', false);
+  const last = await kvGet('lastBackup', null), LK = await getLook();
   let usage = ''; try { const e = await navigator.storage.estimate(); usage = `${(e.usage / 1048576).toFixed(1)} MB used`; } catch (x) {}
   const installed = isNative() || isDesktopApp();
   const offline = installed || ('serviceWorker' in navigator && navigator.serviceWorker.controller);
-  view.innerHTML = `<h1>Data and settings</h1>
+  view.innerHTML = `<h1>Settings</h1>
+  <h2>Appearance</h2><div id="lookbox">${lookInner(LK)}</div>
   <h2>Back up and move your data</h2>
   <p>Your supplies, photos, stars and settings live only on this device. Save a backup file to the flash drive, then restore it on any other device.</p>
   <p class="dim">Last backup: ${last ? esc(last.slice(0, 16).replace('T', ' ')) : 'never'} · ${inv.length} items · ${usage}</p>
@@ -902,21 +958,15 @@ async function vData() {
   ${deferredInstall ? '<button id="inst" class="pri">Install as an app</button>' : ''}
   <h2>Storage: what is loaded on this device</h2>
   <div id="stor"><p class="dim">Checking…</p></div>
-  <h2>Display</h2>
-  <div class="row"><button id="th">Theme: ${theme}</button><button id="bg">Large text: ${big ? 'on' : 'off'}</button></div>
   <h2>About</h2><p class="dim">Version 0.1. Library: ${LIB.items.length} guides in ${LIB.cats.length} topics.</p>`;
   paintStorage();
   $('#exp').onclick = async () => { await exportAll(); vData(); };
   const run = async rep => { const f = $('#imp').files[0]; if (!f) return alert('Choose a backup file first.'); if (rep && !confirm('This erases what is on this device first. Continue?')) return; try { alert(await importAll(f, rep)); vData(); } catch (e) { alert(e.message); } };
   $('#impm').onclick = () => run(false); $('#impr').onclick = () => run(true);
   if ($('#inst')) $('#inst').onclick = () => deferredInstall.prompt();
-  $('#th').onclick = async () => { await kvSet('theme', theme === 'dark' ? 'light' : 'dark'); applyPrefs(); vData(); };
-  $('#bg').onclick = async () => { await kvSet('big', !big); applyPrefs(); vData(); };
+  $('#lookbox').onclick = async e => { const b = e.target.closest('[data-k]'); if (!b) return; const l = await setLook({ [b.dataset.k]: b.dataset.v }); $('#lookbox').innerHTML = lookInner(l); };
 }
-async function applyPrefs() {
-  const r = document.documentElement; r.dataset.theme = await kvGet('theme', 'dark'); r.dataset.big = String(await kvGet('big', false));
-  const m = document.querySelector('meta[name=theme-color]'); if (m) m.content = r.dataset.theme === 'dark' ? '#000000' : '#fafaf7';
-}
+async function applyPrefs() { applyLook(await getLook()); }
 
 function showStorageWarning() {
   const d = document.createElement('div'); d.className = 'warn'; d.style.margin = '8px 12px';
@@ -947,9 +997,11 @@ function route() {
   else if (p[0] === 'map') window.BHMap.open(view, p.slice(1));
   else vHome();
   if (p[0] !== 'e') window.scrollTo(0, 0);
+  Tasks.refresh(); setTimeout(Tasks.refresh, 350);
 }
 $('#homeBtn').onclick = () => { location.hash = '#/'; };
 Tasks.init();
+try { applyLook(JSON.parse(localStorage.getItem('bh_look') || 'null')); } catch (e) { applyLook(null); }
 $('#quickBtn').onclick = () => { location.hash = '#/e/quick-sheet'; };
 $('#searchForm').onsubmit = e => { e.preventDefault(); const q = $('#q').value.trim(); if (q) location.hash = '#/search/' + encodeURIComponent(q); $('#q').blur(); };
 window.addEventListener('hashchange', route);
