@@ -79,6 +79,12 @@
     view.innerHTML = head() + '<p class="dim">Loading…</p>';
     const pk = await installed();
     if (!pk) {
+      const bs = window.BHMap.builtinState ? window.BHMap.builtinState() : null;
+      if (bs && bs.has) {   // full edition: the encyclopedia is inside the app and is being copied in
+        view.innerHTML = head() + note('<b>The medical encyclopedia is built into this app.</b> It is being set up for first use. This happens once and takes a few minutes, and this page opens by itself when it is ready.') + '<p class="dim" id="encbi"></p>';
+        const f = async () => { const el = $('#encbi'); if (!el || !document.body.contains(el)) return window.BHMap.offBuiltin(f); el.textContent = window.BHMap.builtinState().text; if (await installed()) { window.BHMap.offBuiltin(f); if (location.hash.startsWith('#/ency')) open(view, sub); } };
+        window.BHMap.onBuiltin(f); f(); window.BHMap.ensureBuiltin(); return;
+      }
       view.innerHTML = head() + note('<b>The medical encyclopedia is an optional pack.</b> It holds about the conditions, injuries, poisoning, first aid, infections, anatomy, tests and medicines that Wikipedia explains, shortened for offline use. Add <code>Encyclopedia-Medical.bhmap</code> from the flash drive (Map-Packs folder) below.') +
         `<div class="row"><input type="file" id="encin"></div><div id="enctask"></div><p class="dim" id="encmsg"></p>`;
       $('#encin').onchange = async e => { const f = e.target.files[0]; if (!f) return; const m = $('#encmsg'); m.textContent = 'Adding ' + f.name + '. You can leave this screen: a round badge at the top shows how far it has got.';

@@ -23,7 +23,7 @@ const LAYERS = [
   ['Terrain and heights', [
     ['tint', 'Height colours', 'Colours the land by height above sea level.'],
     ['shade', 'Hill shading', 'Light and shadow that make hills and valleys stand out.'],
-    ['sat', 'Satellite photos (where you added a photo pack)', 'True-colour Sentinel-2 photos at about 10 m per pixel: shows forest, bush, farmland, water, built-up areas and gorges. Single houses are too small to see. Shows only inside the area of the photo pack you added, and only once you zoom in to about 30 km across. Settings > Map packs has a button that takes you there. Contains modified Copernicus Sentinel data.'],
+    ['sat', 'Satellite photos (off until you switch them on)', 'True-colour Sentinel-2 photos at about 10 m per pixel: shows forest, bush, farmland, water, built-up areas and gorges. Single houses are too small to see. Shows only inside the photo areas, and only once you zoom in to about 30 km across. The Photos button on the map switches them on and off and can take you to an area. Contains modified Copernicus Sentinel data.'],
     ['contour', 'Contour lines', 'Lines of equal height. Close lines mean steep ground. Slower to draw.']]],
   ['Borders and names', [
     ['bCountry', 'Country borders', 'Pale-violet line along the country borders.'],
@@ -64,7 +64,7 @@ const NAMEOF = Object.fromEntries(LAYERS.flatMap(g => g[1].map(i => [i[0], i[1]]
 const CAVEAT = { water: 'Untreated water is not safe to drink: boil or treat it. Wells and tanks may be dry, fouled or watched.', shelter: 'Check from a distance for occupants, animals and rockfall before going in.', res: 'May be looted, guarded or empty. Never assume stock. Check from cover.', pub: 'May be locked, guarded, damaged or occupied. Do not assume anyone inside is friendly or that supplies remain.', haz: 'Likely target and fire or smoke risk. Keep well away; plan routes upwind.', choke: 'Likely roadblock or ambush point. Avoid if possible.' };
 
 /* ---------- settings ---------- */
-const DEF = { layers: {}, icon: 100, label: 100, line: 100, iconAuto: true, units: 'km', coord: 'dec', theme: 'auto', start: 'last', home: null, townMin: 'auto', names: true, measureAuto: 0, walk: 4.5, cycle: 15, car: 90, gravelFactor: 0.6, climbH: 600, staleAmber: 180, staleRed: 365, fps: false, gpsEvery: 'cont', gpsAutoOff: 30, gpsStopLeave: true };
+const DEF = { satHide: {}, layers: {}, icon: 100, label: 100, line: 100, iconAuto: true, units: 'km', coord: 'dec', theme: 'auto', start: 'last', home: null, townMin: 'auto', names: true, measureAuto: 0, walk: 4.5, cycle: 15, car: 90, gravelFactor: 0.6, climbH: 600, staleAmber: 180, staleRed: 365, fps: false, gpsEvery: 'cont', gpsAutoOff: 30, gpsStopLeave: true };
 let P = null, firstRun = false, V = { k: 0.5, tx: 0, ty: 0 };
 const M = { sat: { keys: new Set(), cache: new Map(), pending: new Set(), regions: [] }, packs: [], base: null, terrain: false, elev: null, tint: null, shade: null, contourC: {}, places: null, cells: new Map(), pending: new Set(), regions: [], overview: null, root: null, cv: null, ctx: null, CW: 1, CH: 1, DPR: 1, raf: 0, measure: [], measureOn: false, mTimer: 0, me: null, watch: 0, sel: null, pins: [], q: '' };
 let savePrefsT = 0;
@@ -79,6 +79,75 @@ async function loadPacks() {
   const ov = M.packs.find(p => p.pack === 'roads-ov'); M.hasOv = !!ov;
   M.sat.regions = M.packs.filter(p => p.pack === 'imagery').map(p => p.region); await loadSatKeys();
 }
+/* ---------- built-in packs: the full edition carries its maps, routing, encyclopedia and photos inside the app ---------- */
+// On first start they are copied once into the app's storage, in the background, most useful first. A built-in pack is read front to back
+// as a stream, so even a 200 MB pack is never held in memory at once. Built-in packs cannot be removed; what is SHOWN is chosen in Layers and Settings.
+const BI = { list: null, checked: false, mode: false, busy: false, done: 0, total: 0, now: '', nowId: '', err: '', subs: new Set() };
+const biEmit = () => { BI.subs.forEach(f => { try { f(); } catch (e) {} }); try { refreshPackList(); } catch (e) {} };
+const biText = () => BI.busy ? 'Setting up the built-in packs: ' + BI.done + ' of ' + BI.total + ' ready.' + (BI.now ? ' Now: ' + BI.now + '.' : '')
+  : BI.err ? 'A built-in pack could not be set up (' + BI.err + '). It will be tried again when the app starts.'
+  : BI.list ? 'All ' + BI.list.length + ' built-in packs are ready.' : '';
+async function builtinList() {
+  if (BI.checked) return BI.list; BI.checked = true;
+  try {
+    if (window.BHPACKS) BI.list = await window.BHPACKS.list();
+    else if (/^https?:$/.test(location.protocol)) { const r = await fetch('packs/index.json', { cache: 'no-store' }); if (r.ok) { const j = JSON.parse(await r.text()); if (j && Array.isArray(j.packs)) BI.list = j.packs; } }
+  } catch (e) { BI.list = null; }
+  if (!Array.isArray(BI.list) || !BI.list.length) BI.list = null;
+  if (BI.list) BI.mode = true;
+  return BI.list;
+}
+async function openBuiltin(p) {
+  if (window.BHPACKS) {   // Windows app: the shell reads the file in 4 MB pieces
+    let off = 0;
+    return { read: async () => { if (off >= p.size) return { done: true }; const u = await window.BHPACKS.read(p.file, off, 4 << 20); if (!u || !u.length) return { done: true }; off += u.length; return { done: false, value: ArrayBuffer.isView(u) ? u : new Uint8Array(u) }; }, cancel: async () => {} };
+  }
+  const r = await fetch('packs/' + encodeURIComponent(p.file), { cache: 'no-store' });   // phone app: straight out of the app's own files
+  if (!r.ok || !r.body) throw new Error('could not open ' + p.file);
+  return r.body.getReader();
+}
+// Looks like a File to importPack (name, size, slice), but only ever reads forwards.
+function seqFile(p) {
+  let rd = null, pos = 0, bufs = [], have = 0;
+  const stop = async () => { if (rd) { try { await rd.cancel(); } catch (e) {} } rd = null; bufs = []; have = 0; pos = 0; };
+  const take = async (a, b) => {
+    if (!rd || a < pos) { await stop(); rd = await openBuiltin(p); }
+    for (;;) {
+      while (bufs.length && pos + bufs[0].length <= a) { pos += bufs[0].length; have -= bufs[0].length; bufs.shift(); }
+      if (pos + have >= b) break;
+      const r = await rd.read(); if (r.done) throw new Error(p.file + ' ended early');
+      bufs.push(r.value); have += r.value.length;
+    }
+    const out = new Uint8Array(b - a); let o = 0, q = pos;
+    for (const c of bufs) { const s = Math.max(a, q), e = Math.min(b, q + c.length); if (e > s) { out.set(c.subarray(s - q, e - q), o); o += e - s; } q += c.length; if (q >= b) break; }
+    return out;
+  };
+  return { name: p.file, size: p.size, close: stop, slice: (a, b) => ({ arrayBuffer: async () => (await take(a, b)).buffer, text: async () => new TextDecoder().decode(await take(a, b)) }) };
+}
+async function ensureBuiltin() {
+  const list = await builtinList();
+  if (!list) { BI.mode = !!(await kvGet('map.builtin', false)); return; }   // an app without packs inside keeps the lock if a full edition set this device up
+  if (!(await kvGet('map.builtin', false))) await kvSet('map.builtin', true);
+  if (BI.busy || !DB.db) return; BI.busy = true; BI.err = '';
+  let did = 0;
+  try {
+    await loadPacks(); const have = await checkPacks();
+    const todo = list.filter(p => { const m = M.packs.find(x => x.id === p.id); return !(m && m.created === p.created && (have[p.id] || 0) >= p.entries); });
+    BI.total = list.length; BI.done = list.length - todo.length;
+    for (const p of todo) {
+      BI.now = p.name || p.file; BI.nowId = p.id; biEmit();
+      const f = seqFile(p);
+      try { await importPack(f, null, { builtin: true, n: BI.done + 1, of: BI.total }); BI.done++; did++; }
+      catch (e) { BI.err = String(e && e.message || e).slice(0, 90); }
+      finally { await f.close(); }
+      BI.now = ''; BI.nowId = '';
+      if (M.root && document.body.contains(M.root)) { try { await boot(); updateSatBtn(); draw(); } catch (e) {} }
+      biEmit();
+    }
+  } catch (e) { BI.err = String(e && e.message || e).slice(0, 90); }
+  finally { BI.busy = false; BI.now = ''; BI.nowId = ''; biEmit(); }
+  if (did && !BI.err && window.BHToast) window.BHToast('The built-in maps, encyclopedia and photos are ready.');
+}
 async function importPack(file, progress, opts = {}) {
   const head = new Uint8Array(await file.slice(0, 11).arrayBuffer());
   if (String.fromCharCode(...head.slice(0, 6)) !== 'BHMAP1') throw new Error('That is not a map pack file.');
@@ -86,7 +155,8 @@ async function importPack(file, progress, opts = {}) {
   if (!DB.db) throw new Error('This device would not let the app save data, so map packs cannot be stored.');
   const id = hdr.pack + ':' + hdr.region, tab = hdr.pack === 'ency' ? 'meds' : 'map', nice = hdr.pack === 'ency' ? 'the encyclopedia' : hdr.pack === 'imagery' ? 'satellite photos' : 'a map pack';
   // shown in the round progress badge, the header pill and (if wanted) on the screen; it can be paused or cancelled
-  const T = window.BHTasks ? window.BHTasks.start({ kind: 'upload', label: 'Adding ' + String(hdr.name || file.name).slice(0, 70), short: 'Adding ' + nice.replace('the ', ''), pct: 0, canPause: true, canCancel: true, tab }) : null;
+  const bi = !!opts.builtin;   // a built-in pack: shown as setting up, cannot be cancelled, no toast for every single pack
+  const T = window.BHTasks ? window.BHTasks.start(bi ? { kind: 'upload', label: 'Setting up ' + String(hdr.name || file.name).slice(0, 60) + ' (' + opts.n + ' of ' + opts.of + ')', short: 'Setting up maps', pct: 0, canPause: true, canCancel: false, tab: '', home: '-' } : { kind: 'upload', label: 'Adding ' + String(hdr.name || file.name).slice(0, 70), short: 'Adding ' + nice.replace('the ', ''), pct: 0, canPause: true, canCancel: true, tab }) : null;
   if (T && opts.onTask) opts.onTask(T);
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   let batch = [], bytes = 0, done = 0; const total = hdr.entries.length, written = [];
@@ -108,7 +178,7 @@ async function importPack(file, progress, opts = {}) {
     const list = (await kvGet('map.packs', [])).filter(p => p.id !== id); list.push(meta); await kvSet('map.packs', list);
     M.cells.clear(); M.pending.clear(); M.base = null; M.places = null; M.terrain = false;
     await loadPacks();
-    if (T) window.BHTasks.end(T, { tab, toast: 'Finished adding ' + nice });
+    if (T) window.BHTasks.end(T, bi ? {} : { tab, toast: 'Finished adding ' + nice });
     return meta;
   } catch (err) {
     try { await del(written); } catch (e) {}
@@ -250,7 +320,7 @@ async function loadSatKeys() {
   if (!s.regions.length || !DB.db) return;
   await new Promise(res => { try { const t = DB.db.transaction('mapdata', 'readonly'), r = t.objectStore('mapdata').openKeyCursor(IDBKeyRange.bound('i/', 'i0')); r.onsuccess = () => { const c = r.result; if (c) { s.keys.add(c.key.slice(2)); c.continue(); } }; t.oncomplete = res; t.onerror = res; } catch (e) { res(); } });
 }
-function satFind(z, x, y) { for (const r of M.sat.regions) { const k = r + '/' + z + '/' + x + '/' + y; if (M.sat.keys.has(k)) return k; } return null; }
+function satFind(z, x, y) { for (const r of M.sat.regions) { if (P && P.satHide && P.satHide[r]) continue; const k = r + '/' + z + '/' + x + '/' + y; if (M.sat.keys.has(k)) return k; } return null; }
 function satWant(key) {
   const s = M.sat; if (s.cache.has(key) || s.pending.has(key)) return; s.pending.add(key);
   getRec('i/' + key).then(d => d ? createImageBitmap(new Blob([d], { type: 'image/jpeg' })) : null).then(bm => { s.pending.delete(key); if (bm) { s.cache.set(key, bm); if (s.cache.size > 260) { const it = s.cache.keys(); for (let i = 0; i < 60; i++) { const kk = it.next().value; const b = s.cache.get(kk); try { b.close && b.close(); } catch (e) {} s.cache.delete(kk); } } draw(); } }).catch(() => s.pending.delete(key));
@@ -494,7 +564,7 @@ function armMeasureTimer() { clearTimeout(M.mTimer); if (M.measureOn && P.measur
 function toast(t) { const el = $('#mpToast'); if (!el) return; el.textContent = t; el.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => el.hidden = true, 2600); }
 
 /* ---------- sheets: layers, settings, cards, pins, packs ---------- */
-function closeSheet() { const s = $('#mpSheet'); if (s) { s.hidden = true; s.innerHTML = ''; } M.sel = null; draw(); }
+function closeSheet() { const s = $('#mpSheet'); if (s) { s.hidden = true; s.innerHTML = ''; } M.sel = null; updateSatBtn(); draw(); }
 function openSheet(html, cls) { const s = $('#mpSheet'); s.className = 'mp-sheet ' + (cls || ''); s.innerHTML = html; s.hidden = false; s.scrollTop = 0; return s; }
 function paintSwatches(root) { root.querySelectorAll('canvas[data-ic]').forEach(c => { const n = swatch(c.dataset.ic, M.DPR); c.width = n.width; c.height = n.height; c.getContext('2d').drawImage(n, 0, 0); }); }
 function layersHtml(first) {
@@ -573,7 +643,7 @@ function sel(k, label, opts) { return `<label>${label}</label><select data-s="${
 function tog(k, label) { return `<label class="lay"><input type="checkbox" data-t="${k}"${P[k] ? ' checked' : ''}><span><b>${label}</b></span></label>`; }
 function openSettings() {
   const s = openSheet(`<div class="row"><b style="flex:1">Map settings</b><button id="shX">Close</button></div>
-  <h3>Map packs</h3><div id="packList"><p class="dim">Checking what is on this device…</p></div><label>Add map packs from the flash drive or Downloads (.bhmap). You can choose several at once, and add the missing ones later.</label><input type="file" id="packIn" multiple><div id="packTask"></div><p class="dim" id="packMsg"></p><div id="packLog"></div>
+  <h3>Map packs</h3><div id="packList"><p class="dim">Checking what is on this device…</p></div><div id="packAdd"><label>Add map packs from the flash drive or Downloads (.bhmap). You can choose several at once, and add the missing ones later.</label><input type="file" id="packIn" multiple></div><div id="packTask"></div><p class="dim" id="packMsg"></p><div id="packLog"></div>
   <h3>When the map opens</h3>${sel('start', 'Start the map at', [['last', 'Where I left it'], ['gps', 'My GPS position'], ['home', 'My home spot'], ['all', 'The whole region']])}<div class="row"><button id="setHome">Use the map centre as my home spot</button></div>
   <h3>Units and numbers</h3>${sel('units', 'Distances', [['km', 'Kilometres and metres'], ['mi', 'Miles and feet']])}${sel('coord', 'Coordinates', [['dec', 'Decimal degrees'], ['dms', 'Degrees, minutes, seconds']])}${sel('theme', 'Map colours', [['auto', 'Follow the app'], ['dark', 'Dark'], ['light', 'Light'], ['contrast', 'High contrast'], ['night', 'Night (red)']])}${sel('townMin', 'Towns shown', [['auto', 'Automatic by zoom'], ['all', 'All towns'], ['5k', 'Over 5,000 people'], ['20k', 'Over 20,000'], ['100k', 'Over 100,000']])}
   <h3>Sizes</h3>${range('icon', 'Icon size', 40, 320, 5, '%')}${range('label', 'Text size', 60, 260, 5, '%')}${range('line', 'Line thickness', 50, 320, 5, '%')}${tog('iconAuto', 'Icons grow and shrink as you zoom')}${tog('names', 'Show names of shops and buildings when zoomed in close')}<div class="row"><button id="szReset">Back to default sizes</button></div>
@@ -589,10 +659,24 @@ function openSettings() {
     if (t.id === 'szReset') { P.icon = P.label = P.line = 100; P.iconAuto = true; savePrefs(); openSettings(); draw(); }
     if (t.id === 'clean') { if (!confirm('Hide every layer and show the "What do you want to see?" list again? Your pins are kept.')) return; P.layers = {}; firstRun = true; savePrefs(); openLayers(true); draw(); }
     if (t.dataset && t.dataset.sat) { goSat(t.dataset.sat); return; }
-    if (t.dataset && t.dataset.rm) { if (!confirm('Remove this map pack from the device?')) return; await removePack(t.dataset.rm); await boot(); refreshPackList(); draw(); }
+    if (t.id === 'biRetry') { ensureBuiltin(); return; }
+    if (t.dataset && t.dataset.rm && !BI.mode) { if (!confirm('Remove this map pack from the device?')) return; await removePack(t.dataset.rm); await boot(); refreshPackList(); draw(); }
   };
   s.oninput = e => { const t = e.target, k = t.dataset && t.dataset.s; if (!k || t.type !== 'range') return; P[k] = +t.value; const b = $('#v_' + k); if (b) b.textContent = t.value + (k === 'icon' || k === 'label' || k === 'line' ? '%' : k.includes('Factor') ? '' : ''); savePrefs(); draw(); };
-  s.onchange = e => { const t = e.target; if (t.dataset && t.dataset.s && t.tagName === 'SELECT') { const v = t.value; P[t.dataset.s] = isNaN(+v) || t.dataset.s === 'townMin' || t.dataset.s === 'theme' || t.dataset.s === 'units' || t.dataset.s === 'coord' || t.dataset.s === 'start' ? v : +v; savePrefs(); if (M.gpsOn && (t.dataset.s === 'gpsEvery' || t.dataset.s === 'gpsAutoOff')) gpsStart(false); draw(); } if (t.dataset && t.dataset.t) { P[t.dataset.t] = t.checked; savePrefs(); draw(); } if (t.id === 'packIn') addPacks(t.files); };
+  s.onchange = e => { const t = e.target; if (t.dataset && t.dataset.sv) { P.satHide = P.satHide || {}; P.satHide[t.dataset.sv] = !t.checked; savePrefs(); draw(); return; } if (t.dataset && t.dataset.s && t.tagName === 'SELECT') { const v = t.value; P[t.dataset.s] = isNaN(+v) || t.dataset.s === 'townMin' || t.dataset.s === 'theme' || t.dataset.s === 'units' || t.dataset.s === 'coord' || t.dataset.s === 'start' ? v : +v; savePrefs(); if (M.gpsOn && (t.dataset.s === 'gpsEvery' || t.dataset.s === 'gpsAutoOff')) gpsStart(false); draw(); } if (t.dataset && t.dataset.t) { P[t.dataset.t] = t.checked; savePrefs(); draw(); } if (t.id === 'packIn') addPacks(t.files); };
+}
+/* ---------- satellite photos: off by default, one button away ---------- */
+function updateSatBtn() { const b = $('#mpSat'); if (!b || !P) return; b.hidden = !M.sat.regions.length; b.textContent = on('sat') ? 'Photos: ON' : 'Photos: off'; b.classList.toggle('pri', on('sat')); }
+const satAreas = () => M.packs.filter(p => p.pack === 'imagery' && p.info && p.info.bbox && !(P.satHide && P.satHide[p.region]));
+function toggleSat() {
+  P.layers.sat = !on('sat'); savePrefs(); updateSatBtn(); draw();
+  if (!on('sat')) return toast('Satellite photos are off.');
+  const vb = viewBounds(), areas = satAreas(), here = areas.some(p => { const b = p.info.bbox; return b[0] < vb[2] && b[2] > vb[0] && b[1] < vb[3] && b[3] > vb[1]; });
+  if (here) return toast((vb[2] - vb[0]) > 1.2 ? 'Satellite photos are on. Zoom in to see them.' : 'Satellite photos are on.');
+  if (!areas.length) return toast('Satellite photos are on, but every photo area is unticked in Settings > Map packs.');
+  // nothing to see where the map is now: offer the areas that have photos
+  const s = openSheet('<div class="row"><b style="flex:1">Satellite photos are on</b><button id="shX">Close</button></div><p class="dim">There are no photos where the map is now. Tap an area to go there, or close this and move the map yourself.</p>' + areas.map(p => '<div class="row"><button data-sat="' + esc(p.id) + '" style="flex:1;text-align:left">' + esc(String(p.name || p.region).replace(/^(Satellite photos|Photos):\s*/i, '').replace(/\s*\(Sentinel[^)]*\)$/, '')) + '</button></div>').join(''));
+  s.onclick = e => { const t = e.target; if (t.id === 'shX') return closeSheet(); if (t.dataset && t.dataset.sat) goSat(t.dataset.sat); };
 }
 function goSat(id) {
   const p = M.packs.find(x => x.id === id), b = p && p.info && p.info.bbox; if (!b) return toast('This photo pack does not say where it is.');
@@ -631,32 +715,37 @@ async function checkPacks() {
 }
 async function refreshPackList() {
   const box = $('#packList'); if (!box) return; const have = await checkPacks(), byId = Object.fromEntries(M.packs.map(p => [p.id, p]));
-  let ok = 0; const missing = [];
-  const rows = KNOWN.map(([id, file, name, mb, req]) => {
-    const p = byId[id], n = have[id] || 0; let st, cls;
-    if (p && n >= p.entries) { st = 'Added'; cls = 'ok'; ok++; }
-    else if (p || n) { st = 'Incomplete' + (p ? ' (' + n + ' of ' + p.entries + ' parts)' : '') + '. Add this file again.'; cls = 'bad'; missing.push(file); }
-    else { st = req ? 'Not added yet. Needed first.' : 'Not added yet'; cls = req ? 'bad' : 'soon'; missing.push(file); }
-    const mark = cls === 'ok' ? '✓' : cls === 'bad' ? '✗' : '○';
-    return '<div class="row"><b class="' + cls + '" style="width:1.3em">' + mark + '</b><span class="grow"><b>' + esc(name) + '</b><br><span class="dim">' + esc(file) + ' · about ' + mb + ' MB · <span class="' + cls + '">' + st + '</span></span></span>' + (p ? '<button class="dng" data-rm="' + esc(id) + '">Remove</button>' : '') + '</div>';
-  });
+  const bi = BI.mode, inBundle = id => !!(BI.list && BI.list.some(p => p.id === id));
   const done = id => byId[id] && (have[id] || 0) >= byId[id].entries;
-  const photoRows = PHOTOS.map(([id, file, name, mb]) => {
-    const p = byId[id], n = have[id] || 0, covered = COVERED_BY[id] && done(COVERED_BY[id]); let st, cls;
-    if (p && n >= p.entries) { st = 'Added' + (covered ? '. The Cape Region photos already cover this area: you can remove this one to save space.' : ''); cls = 'ok'; }
-    else if (p || n) { st = 'Incomplete' + (p ? ' (' + n + ' of ' + p.entries + ' parts)' : '') + '. Add this file again.'; cls = 'bad'; }
-    else if (covered) { st = 'Not needed: the Cape Region photos already cover this area'; cls = 'soon'; }
-    else { st = 'Not added yet (optional)'; cls = 'soon'; }
-    const mark = cls === 'ok' ? '✓' : cls === 'bad' ? '✗' : '○';
-    return '<div class="row"><b class="' + cls + '" style="width:1.3em">' + mark + '</b><span class="grow"><b>' + esc(name) + '</b><br><span class="dim">' + esc(file) + ' · about ' + mb + ' MB · <span class="' + cls + '">' + st + '</span></span></span>' + (p && n >= p.entries ? '<button data-sat="' + esc(id) + '">Show on map</button>' : '') + (p ? '<button class="dng" data-rm="' + esc(id) + '">Remove</button>' : '') + '</div>';
+  const state = (id, kind) => {   // kind: 'req' = needed first, 'map', 'opt' = optional
+    const p = byId[id], n = have[id] || 0;
+    if (p && n >= p.entries) return [bi ? 'Built in' : 'Added', 'ok'];
+    if (bi && inBundle(id)) return [BI.busy ? (BI.nowId === id ? 'Being set up now…' : 'Waiting to be set up') : 'Not set up yet. It is tried again when the app starts.', 'soon'];
+    if (p || n) return ['Incomplete' + (p ? ' (' + n + ' of ' + p.entries + ' parts)' : '') + '. Add this file again.', 'bad'];
+    return [kind === 'req' ? 'Not added yet. Needed first.' : kind === 'opt' ? 'Not added yet (optional)' : 'Not added yet', kind === 'req' ? 'bad' : 'soon'];
+  };
+  const mark = cls => cls === 'ok' ? '✓' : cls === 'bad' ? '✗' : '○';
+  const rm = id => bi || !byId[id] ? '' : '<button class="dng" data-rm="' + esc(id) + '">Remove</button>';   // built-in packs cannot be removed
+  const line = (id, file, name, mb, st, cls, extra) => '<div class="row"><b class="' + cls + '" style="width:1.3em">' + mark(cls) + '</b><span class="grow"><b>' + esc(name) + '</b><br><span class="dim">' + (bi ? '' : esc(file) + ' · ') + 'about ' + mb + ' MB · <span class="' + cls + '">' + st + '</span></span></span>' + (extra || '') + rm(id) + '</div>';
+  let ok = 0; const missing = [];
+  const rows = KNOWN.map(([id, file, name, mb, req]) => { const [st, cls] = state(id, req ? 'req' : 'map'); if (cls === 'ok') ok++; else missing.push(file); return line(id, file, name, mb, st, cls); });
+  const photoRows = PHOTOS.filter(([id]) => !(bi && COVERED_BY[id] && !byId[id])).map(([id, file, name, mb]) => {
+    const covered = COVERED_BY[id] && done(COVERED_BY[id]), region = id.split(':')[1]; let [st, cls] = state(id, 'opt');
+    if (cls === 'ok' && covered && !bi) st += '. The Cape Region photos already cover this area: you can remove this one to save space.';
+    else if (cls === 'soon' && covered) st = 'Not needed: the Cape Region photos already cover this area';
+    const use = done(id) ? '<label style="display:flex;gap:6px;align-items:center;margin:0;color:var(--fg)"><input type="checkbox" data-sv="' + esc(region) + '"' + (P && P.satHide && P.satHide[region] ? '' : ' checked') + '>Use</label><button data-sat="' + esc(id) + '">Show on map</button>' : '';
+    return line(id, file, name, mb, st, cls, use);
   });
-  const refRows = REFS.map(([id, file, name, mb]) => {
-    const p = byId[id], n = have[id] || 0; let st, cls;
-    if (p && n >= p.entries) { st = 'Added'; cls = 'ok'; } else if (p || n) { st = 'Incomplete' + (p ? ' (' + n + ' of ' + p.entries + ' parts)' : '') + '. Add this file again.'; cls = 'bad'; } else { st = 'Not added yet (optional). Add it here, or from Meds > Encyclopedia'; cls = 'soon'; }
-    return '<div class="row"><b class="' + cls + '" style="width:1.3em">' + (cls === 'ok' ? '\u2713' : cls === 'bad' ? '\u2717' : '\u25cb') + '</b><span class="grow"><b>' + esc(name) + '</b><br><span class="dim">' + esc(file) + ' \u00b7 about ' + mb + ' MB \u00b7 <span class="' + cls + '">' + st + '</span></span></span>' + (p ? '<button class="dng" data-rm="' + esc(id) + '">Remove</button>' : '') + '</div>';
-  });
-  const extra = M.packs.filter(p => !KNOWN.some(k => k[0] === p.id) && !PHOTOS.some(k => k[0] === p.id) && !REFS.some(k => k[0] === p.id)).map(p => '<div class="row"><b class="ok" style="width:1.3em">✓</b><span class="grow"><b>' + esc(p.name) + '</b><br><span class="dim">' + p.mb + ' MB' + (p.pack === 'imagery' ? ' · satellite photos. Show them on the map with the button, then zoom in.' : '') + '</span></span>' + (p.pack === 'imagery' ? '<button data-sat="' + esc(p.id) + '">Show on map</button>' : '') + '<button class="dng" data-rm="' + esc(p.id) + '">Remove</button></div>').join('');
-  box.innerHTML = '<p><b>' + ok + ' of ' + KNOWN.length + ' map packs added.</b>' + (missing.length ? ' <span class="dim">Still to add: ' + esc(missing.join(', ')) + '</span>' : ' Everything is in.') + '</p>' + rows.join('') + '<p style="margin-top:14px"><b>Satellite photos</b> <span class="dim">(optional: add only the areas you want)</span></p>' + photoRows.join('') + '<p style="margin-top:14px"><b>Reference packs</b> <span class="dim">(optional)</span></p>' + refRows.join('') + extra;
+  const refRows = REFS.map(([id, file, name, mb]) => { let [st, cls] = state(id, 'opt'); if (!bi && cls === 'soon') st = 'Not added yet (optional). Add it here, or from Meds > Encyclopedia'; return line(id, file, name, mb, st, cls); });
+  const extra = M.packs.filter(p => !KNOWN.some(k => k[0] === p.id) && !PHOTOS.some(k => k[0] === p.id) && !REFS.some(k => k[0] === p.id)).map(p => '<div class="row"><b class="ok" style="width:1.3em">✓</b><span class="grow"><b>' + esc(p.name) + '</b><br><span class="dim">' + p.mb + ' MB' + (p.pack === 'imagery' ? ' · satellite photos. Show them on the map with the button, then zoom in.' : '') + '</span></span>' + (p.pack === 'imagery' ? '<button data-sat="' + esc(p.id) + '">Show on map</button>' : '') + rm(p.id) + '</div>').join('');
+  const head = bi
+    ? '<p><b>' + ok + ' of ' + KNOWN.length + ' map packs ready.</b> <span class="dim">' + (BI.busy || BI.err ? esc(biText()) : missing.length ? 'Still missing: ' + esc(missing.join(', ')) : 'The maps are part of the app and cannot be removed. Choose what you want to see in Layers.') + '</span></p>' + (BI.err && !BI.busy && BI.list ? '<div class="row"><button id="biRetry">Try setting up again</button></div>' : '')
+    : '<p><b>' + ok + ' of ' + KNOWN.length + ' map packs added.</b>' + (missing.length ? ' <span class="dim">Still to add: ' + esc(missing.join(', ')) + '</span>' : ' Everything is in.') + '</p>';
+  box.innerHTML = head + rows.join('')
+    + '<p style="margin-top:14px"><b>Satellite photos</b> <span class="dim">' + (bi ? '(off until you press Photos on the map. Untick Use to leave an area out.)' : '(optional: add only the areas you want. Untick Use to leave an area out.)') + '</span></p>' + photoRows.join('')
+    + '<p style="margin-top:14px"><b>Reference packs</b>' + (bi ? '' : ' <span class="dim">(optional)</span>') + '</p>' + refRows.join('') + extra;
+  // adding files by hand is only for apps without the packs inside (or to repair a device that a full edition set up)
+  const add = $('#packAdd'); if (add) add.hidden = bi && (!!BI.list || !missing.length);
 }
 async function addPacks(files) {
   const bar = null, msg = $('#packMsg'), log = $('#packLog'), res = [];
@@ -718,6 +807,18 @@ async function boot() {
   await loadPacks(); const ok = await loadBase(); if (ok) { await loadPlaces(); loadTerrain().then(() => draw()); loadOverview().then(() => draw()); }
   return ok;
 }
+// Full edition, first start: the base map is still being copied in. Opens the map by itself when it is there.
+function biSetupScreen(view, sub) {
+  view.innerHTML = '<div class="mp-empty" id="biSetup"><h2>Map</h2><p><b>Setting up the built-in maps.</b> This happens once and takes a few minutes. The map opens by itself as soon as the base map is ready. Roads, the route planner, the encyclopedia and the satellite photos follow in the background, and you can use the rest of the app meanwhile.</p><p id="biStat"></p><div id="packList"></div><p class="dim">Map data: OpenStreetMap contributors (ODbL), Natural Earth, AWS Terrain Tiles. Photos contain modified Copernicus Sentinel data.</p></div>';
+  const el = $('#biSetup'), had = M.packs.some(p => p.id === 'base:all');
+  el.onclick = e => { if (e.target.id === 'biRetry') ensureBuiltin(); };
+  const f = () => {
+    if (!document.body.contains(el)) return BI.subs.delete(f);
+    const st = $('#biStat'); if (st) st.textContent = biText();
+    if (!had && M.packs.some(p => p.id === 'base:all')) { BI.subs.delete(f); if (location.hash.startsWith('#/map')) open(view, sub); }
+  };
+  BI.subs.add(f); f(); refreshPackList(); ensureBuiltin();
+}
 function noPacksHtml() {
   return `<div class="mp-empty"><h2>Map</h2><p>The map works with no internet, but it needs its map packs first. Copy them once from the flash drive.</p>
   <ol><li>On the flash drive open the <b>Map-Packs</b> folder.</li><li>Tap the button below and choose <b>Base-Terrain-Places.bhmap</b>, then the <b>Roads</b> files (South Africa first). You can pick several at once.</li><li>When it says Added, the map opens.</li></ol>
@@ -731,10 +832,11 @@ async function open(view, sub) {
   M.pins = M.lock ? [] : await kvGet('pins', []);
   const ok = await boot();
   if (!DB.db) { view.innerHTML = '<div class="mp-empty"><h2>Map</h2><p class="warn">This device would not let the app save data, so map packs cannot be stored here.</p></div>'; return; }
+  if (!ok && await builtinList()) { biSetupScreen(view, sub); return; }
   if (!ok) { view.innerHTML = noPacksHtml(); $('#packIn').onchange = async e => { await addPacks(e.target.files); if (M.base) open(view, sub); }; refreshPackList(); $('#packList').onclick = async e => { const b = e.target.dataset && e.target.dataset.rm; if (b) { await removePack(b); refreshPackList(); } }; return; }
   view.innerHTML = `<div class="mp" id="mp"><canvas id="mpc"></canvas>
   <div class="mp-top"><button id="mpL" class="pri">Layers</button><button id="mpS">Settings</button><input id="mpQ" type="search" placeholder="Find a town, pin or coordinates…" autocomplete="off"></div><div class="mp-find" id="mpFind" hidden></div>
-  <div class="mp-fab"><button id="mpZin" aria-label="Zoom in">+</button><button id="mpZout" aria-label="Zoom out">−</button><button id="mpLoc" aria-label="Go to my location">◎</button><button id="mpGps" class="pill">GPS: off</button><button id="mpMeas" class="pill">Measure</button><button id="mpRt" class="pill">Route</button></div>
+  <div class="mp-fab"><button id="mpZin" aria-label="Zoom in">+</button><button id="mpZout" aria-label="Zoom out">−</button><button id="mpLoc" aria-label="Go to my location">◎</button><button id="mpGps" class="pill">GPS: off</button><button id="mpSat" class="pill" hidden>Photos: off</button><button id="mpMeas" class="pill">Measure</button><button id="mpRt" class="pill">Route</button></div>
   <div class="mp-meas" id="mpMeasInfo" hidden></div><div class="mp-read" id="mpRead"></div><div class="mp-toast" id="mpToast" hidden></div><div class="mp-sheet" id="mpSheet" hidden></div></div>`;
   M.root = $('#mp'); M.cv = $('#mpc'); M.ctx = M.cv.getContext('2d'); setSize();
   const saved = await kvGet('map.view', null);
@@ -742,7 +844,7 @@ async function open(view, sub) {
   if (!(P.start === 'home' && P.home)) { if (!(P.start === 'last' && saved && saved.k)) fit(); }
   bindPointer(); searchBox();
   $('#mpL').onclick = () => openLayers(false); $('#mpS').onclick = openSettings;
-  $('#mpZin').onclick = () => zoomAt(1.6, M.CW / 2, M.CH / 2); $('#mpZout').onclick = () => zoomAt(1 / 1.6, M.CW / 2, M.CH / 2); $('#mpLoc').onclick = locate; $('#mpGps').onclick = toggleGps; updateGpsBtn();
+  $('#mpZin').onclick = () => zoomAt(1.6, M.CW / 2, M.CH / 2); $('#mpZout').onclick = () => zoomAt(1 / 1.6, M.CW / 2, M.CH / 2); $('#mpLoc').onclick = locate; $('#mpGps').onclick = toggleGps; updateGpsBtn(); $('#mpSat').onclick = toggleSat; updateSatBtn();
   $('#mpMeas').onclick = () => toggleMeasure(); $('#mpRt').onclick = () => { if (window.BHRoute) window.BHRoute.open(); else toast('The route planner is not installed in this build.'); };
   M.measureOn = false; if (P.start === 'gps') gpsStart(true);
   window.addEventListener('resize', onResize); draw();
@@ -750,5 +852,7 @@ async function open(view, sub) {
 }
 function onResize() { if (!M.root || !document.body.contains(M.root)) return window.removeEventListener('resize', onResize); setSize(); draw(); }
 function leave() { document.body.classList.remove('mapmode'); clearTimeout(M.mTimer); if (P && P.gpsStopLeave && M.gpsOn) gpsStop(true); }
-window.BHMap = { importPack, listPacks: async () => { await loadPacks(); return M.packs; }, removePackById: id => removePack(id), open, leave, M, mx, my, unx, uny, hav, kmPerPx, getRec, elevAt, flyTo, draw, openSheet, closeSheet, fmtKm, fmtM, fmtH, fmtCoord, toast, get P() { return P; }, V: () => V };
+window.BHMap = { importPack, listPacks: async () => { await loadPacks(); return M.packs; }, removePackById: id => BI.mode ? null : removePack(id), ensureBuiltin, builtin: () => BI.mode, builtinState: () => ({ busy: BI.busy, done: BI.done, total: BI.total, text: biText(), has: !!BI.list }), onBuiltin: f => BI.subs.add(f), offBuiltin: f => BI.subs.delete(f), open, leave, M, mx, my, unx, uny, hav, kmPerPx, getRec, elevAt, flyTo, draw, openSheet, closeSheet, fmtKm, fmtM, fmtH, fmtCoord, toast, get P() { return P; }, V: () => V };
+// full edition: set the built-in packs up in the background once the app's storage is open
+(async () => { for (let i = 0; i < 60 && !DB.db; i++) await new Promise(r => setTimeout(r, 250)); try { await ensureBuiltin(); } catch (e) {} })();
 })();

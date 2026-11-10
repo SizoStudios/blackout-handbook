@@ -999,7 +999,7 @@ const Pin = (() => {
 async function exportAll() {
   if (!(await Pin.needAll())) return;   // a backup without the protected items would be incomplete
   await loadInv();
-  const kv = (await DB.all('kv')).filter(r => r.k !== 'map.packs' && r.k !== 'map.view' && r.k !== 'pinCfg');
+  const kv = (await DB.all('kv')).filter(r => r.k !== 'map.packs' && r.k !== 'map.view' && r.k !== 'pinCfg' && r.k !== 'map.builtin');
   const data = { app: 'blackout-handbook', version: 1, exported: new Date().toISOString(), kv, inv, photos: Object.entries(photos).map(([k, data]) => ({ k, data })) };
   const json = JSON.stringify(data), name = 'blackout-backup-' + new Date().toISOString().slice(0, 10) + '.json';
   const P = isNative() && window.Capacitor.Plugins;
@@ -1026,10 +1026,11 @@ async function importAll(file, replace) {
   if (d.app !== 'blackout-handbook') throw new Error('This is not a Blackout Handbook backup.');
   if (!(await Pin.needAll())) throw new Error('Enter your PIN first: the backup is written into protected parts of the app.');
   if (replace) {
-    const keepPacks = await DB.get('kv', 'map.packs'), keepPin = await DB.get('kv', 'pinCfg');
+    const keepPacks = await DB.get('kv', 'map.packs'), keepPin = await DB.get('kv', 'pinCfg'), keepBi = await DB.get('kv', 'map.builtin');
     await DB.clear('inv'); await DB.clear('photos'); await DB.clear('kv');
     if (keepPin) await DB.put('kv', keepPin);
-    for (const r of d.kv || []) if (r.k !== 'map.packs' && r.k !== 'map.view' && r.k !== 'pinCfg') await DB.put('kv', r);
+    if (keepBi) await DB.put('kv', keepBi);
+    for (const r of d.kv || []) if (r.k !== 'map.packs' && r.k !== 'map.view' && r.k !== 'pinCfg' && r.k !== 'map.builtin') await DB.put('kv', r);
     if (keepPacks) await DB.put('kv', keepPacks);
     for (const i of d.inv || []) await DB.put('inv', i);
     for (const p of d.photos || []) await DB.put('photos', p);
@@ -1112,11 +1113,12 @@ async function paintStorage() {
   const box = $('#stor'); if (!box) return; const L = LLM(), rows = []; let used = '';
   try { const e = await navigator.storage.estimate(); used = `<p class="dim">This app is using about ${(e.usage / 1048576).toFixed(0)} MB of ${(e.quota / 1048576 / 1024).toFixed(1)} GB it may use here.</p>`; } catch (x) {}
   let packs = []; try { packs = window.BHMap ? await window.BHMap.listPacks() : []; } catch (x) {}
-  for (const p of packs) rows.push(`<div class="row"><span class="grow"><b>${esc(p.name)}</b><br><span class="dim">Map pack · ${p.mb} MB</span></span><button class="dng" data-rmp="${esc(p.id)}">Remove</button></div>`);
-  if (packs.length > 1) rows.push('<div class="row"><button class="dng" id="rmAll">Remove all map packs</button></div>');
+  const bi = !!(window.BHMap && window.BHMap.builtin && window.BHMap.builtin());   // full edition: the packs are part of the app
+  for (const p of packs) rows.push(`<div class="row"><span class="grow"><b>${esc(p.name)}</b><br><span class="dim">${bi ? 'Built in' : 'Map pack'} · ${p.mb} MB</span></span>${bi ? '' : `<button class="dng" data-rmp="${esc(p.id)}">Remove</button>`}</div>`);
+  if (packs.length > 1 && !bi) rows.push('<div class="row"><button class="dng" id="rmAll">Remove all map packs</button></div>');
   if (!packs.length) rows.push('<p class="dim">No map packs loaded.</p>');
   if (L) { let st = null; try { st = await L.status(); } catch (x) {} if (st && st.installed) rows.push(`<div class="row"><span class="grow"><b>On-device AI pack</b><br><span class="dim">${st.sizeMB} MB on the phone · ${st.loaded ? 'loaded in memory now' : 'not in memory'}</span></span>${st.loaded ? '<button id="aiFree">Free memory</button>' : ''}<button class="dng" id="aiRm">Delete</button></div>`); else rows.push('<p class="dim">On-device AI pack: not installed.</p>'); } else rows.push('<p class="dim">On-device AI: only in the Android app.</p>');
-  box.innerHTML = used + rows.join('') + '<p class="dim">Removing a map pack or the AI pack frees space. You can add them again from the flash drive any time. Your supplies, notes, people, chats and pins are not touched.</p>';
+  box.innerHTML = used + rows.join('') + '<p class="dim">' + (bi ? 'The maps, encyclopedia and photos are part of the app and cannot be removed. Deleting the AI pack frees space, and you can install it again later.' : 'Removing a map pack or the AI pack frees space. You can add them again from the flash drive any time.') + ' Your supplies, notes, people, chats and pins are not touched.</p>';
   box.onclick = async e => {
     const b = e.target, id = b.dataset && b.dataset.rmp;
     if (id) { if (!confirm('Remove this map pack from the device?')) return; await window.BHMap.removePackById(id); return paintStorage(); }

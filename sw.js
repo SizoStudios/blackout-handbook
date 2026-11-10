@@ -1,4 +1,4 @@
-const V = 'bh-v33'; // bump on every release so installed copies refresh
+const V = 'bh-v34'; // bump on every release so installed copies refresh
 const FILES = ['./', 'style.css', 'app.js', 'map.js', 'route.js', 'meds.js', 'ency.js', 'medical/medicines.js', 'medical/conditions.js', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png',
   'content/00-core.js', 'content/01-security.js', 'content/02-water-air.js', 'content/03-food-shelter.js', 'content/04-health.js',
   'content/05-tech.js', 'content/06-chem-storage.js', 'content/07-nature.js', 'content/08-weapons-ordnance.js', 'content/09-community.js', 'content/10-more.js', 'content/11-nuclear.js', 'content/12-outbreak.js', 'content/phrases.js'];
@@ -25,6 +25,7 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   const req = e.request;
   if (req.method !== 'GET') return;
+  if (new URL(req.url).pathname.indexOf('/packs/') >= 0) return;   // built-in packs go straight into the app's storage, never into this cache
   e.respondWith((async () => {
     const c = await caches.open(V);
     if (req.mode === 'navigate') { const page = await c.match('./'); if (page) return page; }
